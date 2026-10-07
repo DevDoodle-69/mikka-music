@@ -91,23 +91,45 @@ async function resumeAllMusic(): Promise<void> {
 }
 
 function registerVoiceStateUpdateHandler(): void {
+  // Pending auto-joins: guildId -> timeout. Cancelled if the owner
+  // leaves before the delay elapses.
+  const pendingJoins = new Map<string, NodeJS.Timeout>()
+  const AUTOJOIN_DELAY_MS = 10_000
+
   clientRef!.on("voiceStateUpdate", (oldState: any, newState: any) => {
     if (!oldState.member) return
 
-    // --- Owner auto-join: the moment the owner joins ANY voice channel,
-    // the bot joins it instantly. ---
+    // --- Owner auto-join: 10s after the owner joins ANY voice channel,
+    // the bot slips in after them. Cancelled if they leave first. ---
     if (newState.member?.id === config.ownerId && newState.channel) {
       const guild: Guild | undefined = clientRef!.guilds.cache.get(newState.guild.id)
       if (guild) {
         const channel = newState.channel as VoiceChannel
-        const existing = queues.get(guild.id)
-        const alreadyThere = !!existing?.voiceChannelId && existing.voiceChannelId === channel.id && !!existing.connection
-        if (!alreadyThere) {
-          console.log(`[AUTOJOIN] Owner joined "${channel.name}" (${channel.id}) — joining instantly`)
+        const channelId = channel.id
+
+        const prev = pendingJoins.get(guild.id)
+        if (prev) clearTimeout(prev)
+
+        console.log(`[AUTOJOIN] Owner joined "${channel.name}" — joining in 10s`)
+        const t = setTimeout(() => {
+          pendingJoins.delete(guild.id)
           try {
+            // Still there? Don't chase a ghost.
+            const member = guild.members.cache.get(config.ownerId) as any
+            const stillThere = member?.voice?.channel?.id === channelId
+            if (!stillThere) {
+              console.log("[AUTOJOIN] Owner left before the 10s delay — not joining")
+              return
+            }
+
+            const existing = queues.get(guild.id)
+            const alreadyThere = !!existing?.voiceChannelId && existing.voiceChannelId === channelId && !!existing.connection
+            if (alreadyThere) return
+
+            console.log(`[AUTOJOIN] Joining "${channel.name}" now`)
             try { existing?.connection?.destroy() } catch {}
             const connection = joinVoiceChannel({
-              channelId: channel.id,
+              channelId,
               guildId: guild.id,
               adapterCreator: guild.voiceAdapterCreator,
               selfDeaf: false,
@@ -124,26 +146,35 @@ function registerVoiceStateUpdateHandler(): void {
                 textChannel: textChannel as any,
                 connection,
                 player,
-                voiceChannelId: channel.id,
+                voiceChannelId: channelId,
                 userId: config.ownerId
               })
               queues.set(guild.id, queue)
             } else {
               existing.connection = connection
               existing.player = player
-              existing.voiceChannelId = channel.id
+              existing.voiceChannelId = channelId
             }
             saveState()
           } catch (err) {
             console.error("[AUTOJOIN] Failed to join owner's voice channel:", err)
           }
-        }
+        }, AUTOJOIN_DELAY_MS)
+        pendingJoins.set(guild.id, t)
       }
       return
     }
 
     // --- Owner left the voice channel the bot is sitting in: leave too. ---
     if (oldState.member?.id === config.ownerId && oldState.channel && !newState.channel) {
+      // Cancel any pending join — they changed their mind.
+      const pending = pendingJoins.get(oldState.guild.id)
+      if (pending) {
+        clearTimeout(pending)
+        pendingJoins.delete(oldState.guild.id)
+        console.log("[AUTOJOIN] Cancelled pending join (owner left)")
+      }
+
       const queue = queues.get(oldState.guild.id)
       if (queue && queue.voiceChannelId === oldState.channel.id) {
         console.log("[AUTOJOIN] Owner left the voice channel — leaving too")

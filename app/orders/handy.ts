@@ -40,7 +40,8 @@ function handleHelp(msg: Message): void {
     "**silent** - shh mode: I whisper in DMs instead",
     "**clearchat** [number] - tidy up messages",
     "",
-    "*join a voice channel first, and I'll follow you in~*"
+    "*join a voice channel first, and I'll follow you in (I take about 10 seconds, gotta look cute)~*",
+    "*psst~ if I'm already singing somewhere, order me around from DMs or any other server — I'll play it right where I am*"
   ].join("\n")
 
   saySoft(msg.channel as any, helpEmbed)

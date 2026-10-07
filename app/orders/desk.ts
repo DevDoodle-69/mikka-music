@@ -35,33 +35,59 @@ async function handleMessageCreate(msg: Message): Promise<void> {
   let voice: VoiceChannel | null = null
   let queue: Queue | undefined
 
-  if (!msg.member) {
-    for (const [, g] of msg.client.guilds.cache) {
-      try {
-        const member = await g.members.fetch(msg.author.id)
-        if (member.voice.channel) {
+  const liveQueueOf = (g: Guild | undefined): Queue | undefined => {
+    const q = g ? queues.get(g.id) : undefined
+    return q && q.connection ? q : undefined
+  }
+
+  // 1. Live session in this guild?
+  queue = liveQueueOf(guild)
+
+  // 2. Live session ANYWHERE? Control her from DMs, inbox, or another
+  //    server — she plays in the voice channel she's already in.
+  if (!queue) {
+    for (const [gid, q] of queues) {
+      if (q.connection) {
+        const g = msg.client.guilds.cache.get(gid)
+        if (g) {
           guild = g
-          voice = member.voice.channel as VoiceChannel
-          queue = queues.get(guild.id)
-          console.log(`[DM] Found user in voice channel: ${voice.name} in guild ${g.name}`)
+          queue = q
+          console.log(`[COMMAND] Routing to her active session in "${g.name}"`)
           break
         }
-      } catch {
-        continue
       }
     }
+  }
 
-    if (!voice) {
-      await replySoft(msg, "that needs a voice channel, cutie~ hop into one first")
-      return
+  // Best-effort: the voice channel she's sitting in.
+  if (queue && guild && !voice && queue.voiceChannelId) {
+    voice = (guild.channels.cache.get(queue.voiceChannelId) as VoiceChannel) || null
+  }
+
+  // 3. No live session anywhere — find YOUR voice channel to start fresh.
+  if (!queue) {
+    if (!msg.member) {
+      for (const [, g] of msg.client.guilds.cache) {
+        try {
+          const member = await g.members.fetch(msg.author.id)
+          if (member.voice.channel) {
+            guild = g
+            voice = member.voice.channel as VoiceChannel
+            console.log(`[DM] Found you in voice: ${voice.name} (${g.name})`)
+            break
+          }
+        } catch {
+          continue
+        }
+      }
+    } else {
+      voice = msg.member.voice.channel as VoiceChannel | null
     }
-  } else {
-    voice = msg.member.voice.channel as VoiceChannel | null
+
     if (!voice && cmd !== "help" && cmd !== "state" && cmd !== "test") {
       await replySoft(msg, "join a voice channel first~ I'll follow you in")
       return
     }
-    if (guild) queue = queues.get(guild.id)
   }
 
   switch (cmd) {
@@ -126,13 +152,21 @@ async function handleMessageCreate(msg: Message): Promise<void> {
       return
     }
     case "sync": {
-      if (!guild) { await replySoft(msg, "hmm, can't find that server~"); return }
-      await handleSync(msg, args, guild, voice, queue)
+      // Local move: always the message's own server.
+      const localGuild = msg.guild || undefined
+      if (!localGuild) { await replySoft(msg, "that one only works in a server, not DMs~"); return }
+      const localVoice = (msg.member?.voice.channel as VoiceChannel) || null
+      const localQueue = queues.get(localGuild.id)
+      await handleSync(msg, args, localGuild, localVoice, localQueue)
       return
     }
     case "join": {
-      if (!guild) { await replySoft(msg, "hmm, can't find that server~"); return }
-      await handleJoin(msg, args, guild, voice, queue)
+      // Local move: always the message's own server.
+      const localGuild = msg.guild || undefined
+      if (!localGuild) { await replySoft(msg, "that one only works in a server, not DMs~"); return }
+      const localVoice = (msg.member?.voice.channel as VoiceChannel) || null
+      const localQueue = queues.get(localGuild.id)
+      await handleJoin(msg, args, localGuild, localVoice, localQueue)
       return
     }
     case "help": {
