@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: mikka-music
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: OWNER_ID
+        sync: false
+      - key: DISCORD_PREFIX
+        value: "?"
+      - key: NODE_ENV
+        value: production

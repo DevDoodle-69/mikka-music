@@ -5,43 +5,46 @@ import { playSong, playRadio } from "../core/player"
 import { removeAllReactionsFromChannel, createCommandPanel } from "../ui/reactions"
 import config from "../config"
 import { Queue } from "../types"
-import { sendMsg } from "../utils/send"
+import { sendMsg, replyHuman, sendHuman } from "../utils/send"
 
 function handleTest(msg: Message): Promise<Message> {
   console.log("Test : ", msg)
-  return msg.reply("Test command working!")
+  return replyHuman(msg, "Test command working!")
 }
 
 function handleHelp(msg: Message): void {
   const helpEmbed = [
-    "🎵 **Music Selfbot Commands** 🎵",
+    "**Music Selfbot Commands**",
     "",
-    "**?play** <song name> - Search and play a song",
-    "**?play** <single URL> - Play a single YouTube video",
-    "**?play** <playlist URL> [limit] - Play a YouTube playlist (optional limit)",
-    "**?play** <URL1 URL2 URL3...> - Play multiple URLs (space-separated)",
-    "**?skip** - Skip the current song",
-    "**?loop** - Toggle loop mode (Off/Single/All)",
-    "**?shuffle** - Shuffle the current queue",
-    "**?queue** - Show current queue and loop mode",
-    "**?stop** - Stop playing and clear queue",
-    "**?volume** [0-100] - Set or check playback volume",
-    "**?radio** <station name or URL> - Play a radio station",
-    "**?radiostats** - Show radio stream statistics",
-    "**?clearchat** [number] - Delete messages in text channel (default 100, max 100)",
-    "**?leave** - Leave voice channel and clear queue",
-    "**?join** <voice_channel_id> - Join voice channel by ID",
-    "**?sync** - Sync channel ID dan auto-join ke voice channel saat ini",
-    "**?state** - Show current bot state",
-    "**?panel** - Show control panel with reaction UI",
-    "**?silent** - Toggle silent mode (message hanya di DM)",
-    "**?help** - Show this help message",
+    "Mention me to run a command, e.g. @bot play shape of you",
+    "The ? prefix works too, e.g. ?play shape of you",
+    "",
+    "**play** <song name> - Search and play a song",
+    "**play** <single URL> - Play a single YouTube video",
+    "**play** <playlist URL> [limit] - Play a YouTube playlist (optional limit)",
+    "**play** <URL1 URL2 URL3...> - Play multiple URLs (space-separated)",
+    "**skip** - Skip the current song",
+    "**loop** - Toggle loop mode (Off/Single/All)",
+    "**shuffle** - Shuffle the current queue",
+    "**queue** - Show current queue and loop mode",
+    "**stop** - Stop playing and clear queue",
+    "**volume** [0-100] - Set or check playback volume",
+    "**radio** <station name or URL> - Play a radio station",
+    "**radiostats** - Show radio stream statistics",
+    "**clearchat** [number] - Delete messages in text channel (default 100, max 100)",
+    "**leave** - Leave voice channel and clear queue",
+    "**join** <voice_channel_id> - Join voice channel by ID",
+    "**sync** - Sync to the voice channel you are in right now",
+    "**state** - Show current bot state",
+    "**panel** - Show control panel with reaction UI",
+    "**silent** - Toggle silent mode (messages go to DM instead)",
+    "**help** - Show this help message",
     "",
     "*You must be in a voice channel to use these commands*",
-    "*Commands can also be used in DMs when the bot is already in a voice channel*"
+    "The bot auto-joins any voice channel you join."
   ].join("\n")
 
-  msg.channel.send(helpEmbed)
+  sendHuman(msg.channel as any, helpEmbed)
 }
 
 async function handleLeave(msg: Message, guild: Guild | undefined, queue: Queue | undefined): Promise<void> {
@@ -348,7 +351,7 @@ function handleState(msg: Message): void {
   stateMsg += `\n💾 **State File:** ${config.stateFile}`
   stateMsg += `\n✅ **Total Active Queues:** ${queues.size}`
 
-  msg.channel.send(stateMsg)
+  sendHuman(msg.channel as any, stateMsg)
 }
 
 function handlePanel(msg: Message, queue: Queue | undefined): void {
@@ -372,7 +375,7 @@ async function handleSilent(msg: Message, queue: Queue | undefined): Promise<voi
   if (queue.silent) {
     await sendMsg(msg, queue, "🔇 Mode silent **ON** - Semua pesan akan dikirim ke DM")
   } else {
-    await msg.channel.send("🔊 Mode silent **OFF** - Pesan akan dikirim ke channel")
+    await sendHuman(msg.channel as any, "Silent mode OFF - messages will go to the channel")
   }
 }
 

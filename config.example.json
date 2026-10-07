@@ -1,4 +1,1 @@
-{
-  "token": "YOUR_DISCORD_TOKEN_HERE",
-  "prefix": "?"
-}
+{"ownerId":"YOUR_OWNER_DISCORD_ID_HERE","prefix":"?","token":"YOUR_DISCORD_TOKEN_HERE"}

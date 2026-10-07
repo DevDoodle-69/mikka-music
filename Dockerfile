@@ -27,7 +27,7 @@ RUN npx tsc
 # Runtime
 FROM node:20-alpine
 
-ENV TZ=Asia/Jakarta
+ENV TZ=Asia/Dhaka
 ENV NODE_ENV=production
 
 WORKDIR /app

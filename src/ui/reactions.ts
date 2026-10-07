@@ -1,5 +1,6 @@
 import { Message, TextChannel, MessageReaction, ReactionCollector, User } from "selfbotsdk-discordjs"
 import { Queue } from "../types"
+import { sendHuman } from "../utils/send"
 
 async function removeAllReactionsFromChannel(channel: TextChannel): Promise<void> {
   try {
@@ -161,40 +162,39 @@ async function createCommandPanel(message: Message, queue: Queue): Promise<React
     queue.panelCollector = null
   }
 
-  const panelContent = `🎵 **Music Control Panel** 🎵
+  const panelContent = `**Music Control Panel**
 
-**Controls:**
-⏮ - Previous song (if in queue)
-⏯️ - Play/Pause
-⏭ - Skip current song
-🔉 - Volume Down
-🔊 - Volume Up
-⏹ - Stop & Clear Queue
-📻 - Back to Radio
-🎵 - Music Mode
-🗑️ - Clear Chat
-ℹ️ - Show Queue Info
+**Controls (tap a reaction below):**
+[prev] - Previous song (if in queue)
+[play/pause] - Play/Pause
+[next] - Skip current song
+[vol-] - Volume Down
+[vol+] - Volume Up
+[stop] - Stop & Clear Queue
+[radio] - Back to Radio
+[music] - Music Mode
+[clear] - Clear Chat
+[info] - Show Queue Info
 
 **Available Commands:**
-**?play** <song name> - Search and play a song
-**?play** <single URL> - Play a single YouTube video
-**?play** <playlist URL> [limit] - Play a YouTube playlist (optional limit)
-**?play** <URL1 URL2 URL3...> - Play multiple URLs (space-separated)
-**?skip** - Skip the current song
-**?loop** - Toggle loop mode (Off/Single/All)
-**?shuffle** - Shuffle the current queue
-**?queue** - Show current queue and loop mode
-**?stop** - Stop playing and clear queue
-**?volume** [0-100] - Set or check playback volume
-**?radio** <station name or URL> - Play a radio station
-**?clearchat** [number] - Delete messages in text channel (default 100, max 100)
-**?leave** - Leave voice channel and clear queue
-**?sync** - Sync channel ID dan auto-join ke voice channel saat ini
-**?state** - Show current bot state
-**?panel** - Show control panel with reaction UI
-**?help** - Show this help message`
+**@bot play** <song name> - Search and play a song
+**@bot play** <single URL> - Play a single YouTube video
+**@bot play** <playlist URL> [limit] - Play a YouTube playlist (optional limit)
+**@bot skip** - Skip the current song
+**@bot loop** - Toggle loop mode (Off/Single/All)
+**@bot shuffle** - Shuffle the current queue
+**@bot queue** - Show current queue and loop mode
+**@bot stop** - Stop playing and clear queue
+**@bot volume** [0-100] - Set or check playback volume
+**@bot radio** <station name or URL> - Play a radio station
+**@bot leave** - Leave voice channel and clear queue
+**@bot state** - Show current bot state
+**@bot panel** - Show control panel with reaction UI
+**@bot help** - Show this help message
 
-  const panelMsg = await message.channel.send(panelContent)
+Replace @bot with a mention of the bot, or use the ? prefix instead.`
+
+  const panelMsg = await sendHuman(message.channel as any, panelContent)
 
   try {
     for (const emoji of controls) {
@@ -220,19 +220,19 @@ async function createCommandPanel(message: Message, queue: Queue): Promise<React
             queue.currentProcesses.ff.kill()
           }
           queue.player.stop()
-          message.channel.send("⏮️ Playing previous song")
+          sendHuman(message.channel as any, "Playing previous song")
         } else {
-          message.channel.send("ℹ️ No previous song in queue")
+          sendHuman(message.channel as any, "No previous song in queue")
         }
         break
 
       case "⏯️":
         if (queue.player.state.status === "paused") {
           queue.player.unpause()
-          message.channel.send("▶️ Resumed")
+          sendHuman(message.channel as any, "Resumed")
         } else {
           queue.player.pause()
-          message.channel.send("⏸️ Paused")
+          sendHuman(message.channel as any, "Paused")
         }
         break
 
@@ -243,7 +243,7 @@ async function createCommandPanel(message: Message, queue: Queue): Promise<React
           queue.currentProcesses.ff.kill()
         }
         queue.player.stop()
-        message.channel.send("⏭️ Skipped")
+        sendHuman(message.channel as any, "Skipped")
         break
 
       case "🔉":
@@ -271,7 +271,7 @@ async function createCommandPanel(message: Message, queue: Queue): Promise<React
         queue.songs = []
         queue.radioStopped = true
         queue.player.stop()
-        message.channel.send("⏹️ Stopped & Queue Cleared")
+        sendHuman(message.channel as any, "Stopped and queue cleared")
         break
 
       case "🎵":
@@ -281,10 +281,10 @@ async function createCommandPanel(message: Message, queue: Queue): Promise<React
             queue.radioFfmpeg = null
           }
           queue.radioStopped = true
-          message.channel.send("🎵 Switching to Music Mode")
+          sendHuman(message.channel as any, "Switching to music mode")
           if (playSongRef) playSongRef(queue.textChannel?.guild, queue.songs[0])
         } else {
-          message.channel.send("ℹ️ No songs in queue. Use ?play to add songs first")
+          sendHuman(message.channel as any, "No songs in queue. Mention me with play to add songs first")
         }
         break
 
@@ -295,12 +295,12 @@ async function createCommandPanel(message: Message, queue: Queue): Promise<React
             queue.currentProcesses.ff.kill()
           }
           queue.radioStopped = false
-          message.channel.send("📻 Switching back to Radio Mode")
+          sendHuman(message.channel as any, "Switching back to radio mode")
           setTimeout(() => {
             if (playRadioRef) playRadioRef(queue.textChannel?.guild, queue.radioUrl!, queue.radioName!)
           }, 100)
         } else {
-          message.channel.send("ℹ️ No radio station available. Use ?radio to set a station first")
+          sendHuman(message.channel as any, "No radio station available. Set one with the radio command first")
         }
         break
 

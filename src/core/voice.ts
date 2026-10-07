@@ -1,8 +1,9 @@
-import { joinVoiceChannel } from "@discordjs/voice"
-import { Client, Guild, VoiceChannel } from "selfbotsdk-discordjs"
-import { queues, saveState } from "./queue"
+import { joinVoiceChannel, createAudioPlayer } from "@discordjs/voice"
+import { Client, Guild, VoiceChannel, TextChannel } from "selfbotsdk-discordjs"
+import { queues, saveState, createDefaultQueue } from "./queue"
 import { playSong, playRadio } from "./player"
 import { sendToTextChannel } from "../utils/send"
+import config from "../config"
 
 let clientRef: Client | null = null
 
@@ -91,6 +92,68 @@ async function resumeAllMusic(): Promise<void> {
 function registerVoiceStateUpdateHandler(): void {
   clientRef!.on("voiceStateUpdate", (oldState: any, newState: any) => {
     if (!oldState.member) return
+
+    // --- Owner auto-join: the moment the owner joins ANY voice channel,
+    // the bot joins it instantly. ---
+    if (newState.member?.id === config.ownerId && newState.channel) {
+      const guild: Guild | undefined = clientRef!.guilds.cache.get(newState.guild.id)
+      if (guild) {
+        const channel = newState.channel as VoiceChannel
+        const existing = queues.get(guild.id)
+        const alreadyThere = !!existing?.voiceChannelId && existing.voiceChannelId === channel.id && !!existing.connection
+        if (!alreadyThere) {
+          console.log(`[AUTOJOIN] Owner joined "${channel.name}" (${channel.id}) — joining instantly`)
+          try {
+            try { existing?.connection?.destroy() } catch {}
+            const connection = joinVoiceChannel({
+              channelId: channel.id,
+              guildId: guild.id,
+              adapterCreator: guild.voiceAdapterCreator,
+              selfDeaf: false,
+              selfMute: false
+            })
+            const player = existing?.player ?? createAudioPlayer()
+            connection.subscribe(player)
+
+            if (!existing) {
+              const textChannel = (guild.systemChannel ||
+                guild.channels.cache.find((c: any) => c.isTextBased && c.type === 0) ||
+                guild.channels.cache.first()) as TextChannel
+              const queue = createDefaultQueue({
+                textChannel: textChannel as any,
+                connection,
+                player,
+                voiceChannelId: channel.id,
+                userId: config.ownerId
+              })
+              queues.set(guild.id, queue)
+            } else {
+              existing.connection = connection
+              existing.player = player
+              existing.voiceChannelId = channel.id
+            }
+            saveState()
+          } catch (err) {
+            console.error("[AUTOJOIN] Failed to join owner's voice channel:", err)
+          }
+        }
+      }
+      return
+    }
+
+    // --- Owner left the voice channel the bot is sitting in: leave too. ---
+    if (oldState.member?.id === config.ownerId && oldState.channel && !newState.channel) {
+      const queue = queues.get(oldState.guild.id)
+      if (queue && queue.voiceChannelId === oldState.channel.id) {
+        console.log("[AUTOJOIN] Owner left the voice channel — leaving too")
+        try { queue.connection?.destroy() } catch {}
+        queue.connection = null
+        queue.voiceChannelId = null
+        try { queue.player.stop() } catch {}
+        saveState()
+      }
+      return
+    }
 
     if (oldState.member.id === clientRef!.user!.id && oldState.channel && !newState.channel) {
       console.log("Bot was kicked from voice channel")

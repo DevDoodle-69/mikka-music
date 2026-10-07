@@ -8,7 +8,7 @@ import { searchSong } from "../services/youtube"
 import { formatDuration } from "../utils/format"
 import config from "../config"
 import { Queue, PlaylistVideoEntry, Song } from "../types"
-import { sendMsg } from "../utils/send"
+import { sendMsg, stripEmojis } from "../utils/send"
 
 interface PlaylistJSON {
   entries: Array<{
@@ -295,7 +295,8 @@ async function handleQueue(msg: Message, queue: Queue | undefined): Promise<void
   const attachment = new MessageAttachment(buffer, "queue.txt")
 
   // Kirim preview singkat + file .txt
-  const preview = `📜 **Queue** (${queue.songs.length} lagu${currentSong ? ` | 🎵 **${currentSong.title}**` : ""} | Loop: ${loopStatus}) — File: \`queue.txt\``
+  const rawPreview = `**Queue** (${queue.songs.length} songs${currentSong ? ` | Now playing: **${currentSong.title}**` : ""} | Loop: ${loopStatus}) - File: \`queue.txt\``
+  const preview = stripEmojis(rawPreview)
 
   if (queue?.silent) {
     try {

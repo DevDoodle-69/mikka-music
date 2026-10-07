@@ -7,6 +7,7 @@ dotenv.config()
 const config: Config = {
   prefix: process.env.DISCORD_PREFIX || "?",
   token: process.env.DISCORD_TOKEN || "",
+  ownerId: process.env.OWNER_ID || "",
   allowedUsers: process.env.ALLOWED_USERS ? process.env.ALLOWED_USERS.split(",") : [],
   ytdlpExecutable: process.platform === "win32" ? "./yt-dlp.exe" : "yt-dlp",
   ffmpeg: process.platform === "win32" ? require("ffmpeg-static") : "ffmpeg",
@@ -14,16 +15,26 @@ const config: Config = {
   cookiesFile: process.env.COOKIES_FILE || path.join(__dirname, "..", "cookies.txt")
 }
 
-if (!config.token) {
+if (!config.token || !config.ownerId) {
   try {
-    const fileConfig: { prefix?: string; token: string; allowedUsers?: string[] } = require("../config.json")
+    const fileConfig: { prefix?: string; token?: string; ownerId?: string; allowedUsers?: string[] } = require("../config.json")
     config.prefix = fileConfig.prefix || config.prefix
-    config.token = fileConfig.token
+    config.token = fileConfig.token || config.token
+    config.ownerId = fileConfig.ownerId || config.ownerId
     config.allowedUsers = fileConfig.allowedUsers || config.allowedUsers
   } catch {
-    console.error("Error: DISCORD_TOKEN environment variable or config.json required")
-    process.exit(1)
+    // config.json is optional when env vars are set
   }
+}
+
+if (!config.token) {
+  console.error("Error: DISCORD_TOKEN environment variable or config.json \"token\" is required")
+  process.exit(1)
+}
+
+if (!config.ownerId) {
+  console.error("Error: OWNER_ID environment variable or config.json \"ownerId\" is required")
+  process.exit(1)
 }
 
 export default config

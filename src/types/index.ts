@@ -100,6 +100,7 @@ export interface RadioMetadataResult {
 export interface Config {
   prefix: string
   token: string
+  ownerId: string
   allowedUsers: string[]
   ytdlpExecutable: string
   ffmpeg: string

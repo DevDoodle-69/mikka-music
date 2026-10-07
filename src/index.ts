@@ -1,5 +1,6 @@
 import { Client, Guild, VoiceChannel, TextChannel } from "selfbotsdk-discordjs"
 import config from "./config"
+import http from "http"
 import { queues, loadState, saveState } from "./core/queue"
 import { playSong, playRadio } from "./core/player"
 import { setClient, resumeAllMusic, registerVoiceStateUpdateHandler } from "./core/voice"
@@ -140,3 +141,13 @@ registerVoiceStateUpdateHandler()
 client.on("messageCreate", handleMessageCreate)
 
 client.login(config.token)
+
+// Tiny health endpoint so hosts like Render (web services) see the
+// process as alive. Uses only Node's built-in http module.
+const PORT = Number(process.env.PORT) || 3000
+http
+  .createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/plain" })
+    res.end("ok")
+  })
+  .listen(PORT, () => console.log(`🌐 Health endpoint listening on port ${PORT}`))
