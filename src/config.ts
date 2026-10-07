@@ -39,10 +39,38 @@ if (!config.token || !config.ownerId || !config.mp3ApiKey) {
 // write it to a temp Netscape-format cookies file so yt-dlp can use it.
 // This is how you pass your own YouTube login: export cookies.txt from a
 // cookie-editor extension and paste the whole file content.
+function cookiesToNetscape(raw: string): string {
+  const trimmed = raw.trim()
+  // Already Netscape format? Pass through.
+  if (!trimmed.startsWith("[") && !trimmed.startsWith("{")) return trimmed
+  // JSON export (e.g. from Cookie-Editor): convert to Netscape format.
+  try {
+    const parsed = JSON.parse(trimmed)
+    const list: any[] = Array.isArray(parsed) ? parsed : parsed.cookies || parsed.data || []
+    const lines = [
+      "# Netscape HTTP Cookie File",
+      "# Converted by mikka-music from JSON cookie export",
+      ""
+    ]
+    for (const c of list) {
+      if (!c || typeof c.name !== "string") continue
+      const domain = String(c.domain || "")
+      const flag = c.hostOnly ? "FALSE" : "TRUE"
+      const cookiePath = String(c.path || "/")
+      const secure = c.secure ? "TRUE" : "FALSE"
+      const exp = c.session ? 0 : Math.floor(Number(c.expirationDate || 0))
+      lines.push([domain, flag, cookiePath, secure, String(exp), c.name, String(c.value ?? "")].join("\t"))
+    }
+    return lines.join("\n")
+  } catch {
+    return trimmed // not valid JSON either; pass through as-is
+  }
+}
+
 if (config.youtubeCookies && config.youtubeCookies.trim()) {
   try {
     const cookiePath = path.join(os.tmpdir(), "youtube-cookies.txt")
-    fs.writeFileSync(cookiePath, config.youtubeCookies.trim() + "\n")
+    fs.writeFileSync(cookiePath, cookiesToNetscape(config.youtubeCookies) + "\n")
     config.cookiesFile = cookiePath
     console.log("YouTube cookies loaded, yt-dlp will search as your account")
   } catch (err) {

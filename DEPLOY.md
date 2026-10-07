@@ -115,6 +115,8 @@ Needs `ffmpeg` and `yt-dlp` on PATH for local runs
   1. In your browser, install a cookie-editor extension (e.g.
      "Get cookies.txt LOCALLY"), log into YouTube, and export cookies
      for youtube.com — you get a `cookies.txt` file in Netscape format.
+     (If your extension exports JSON instead, that works too — the bot
+     converts it automatically.)
   2. Open that file, copy its **entire content**, and paste it into the
      `YOUTUBE_COOKIES` environment variable on Render (multiline is fine).
   3. Redeploy. The bot writes it to a temp cookies file at startup and
