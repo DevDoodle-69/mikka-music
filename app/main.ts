@@ -1,6 +1,9 @@
 import { Client, Guild, VoiceChannel, TextChannel } from "selfbotsdk-discordjs"
 import config from "./setup"
 import http from "http"
+import os from "os"
+import fs from "fs"
+import path from "path"
 import { queues, loadState, saveState } from "./voice/shelf"
 import { playTrack, playStation } from "./voice/jukebox"
 import { setClient, resumeAllMusic, registerVoiceStateUpdateHandler } from "./voice/session"
@@ -21,10 +24,18 @@ function gracefulShutdown(signal: string): void {
     if (queue.currentProcesses) {
       queue.currentProcesses.ytdlp?.kill()
       queue.currentProcesses.ff.kill()
-      dropTemp(queue)
     }
+    dropTemp(queue)
     if (queue.metadataDetector) queue.metadataDetector.stop()
   }
+  // Sweep any stray mikka-*.mp3 files left in the temp dir.
+  try {
+    for (const f of fs.readdirSync(os.tmpdir())) {
+      if (f.startsWith("mikka-") && f.endsWith(".mp3")) {
+        try { fs.unlinkSync(path.join(os.tmpdir(), f)) } catch {}
+      }
+    }
+  } catch {}
   process.exit(0)
 }
 

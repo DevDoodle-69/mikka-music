@@ -41,17 +41,21 @@ async function handleMessageCreate(msg: Message): Promise<void> {
 
   let ownerGuild: Guild | undefined
   let ownerVoice: VoiceChannel | null = null
-  if (msg.member?.voice.channel) {
+  // Note: optional-chaining through .voice too — selfbot member objects can be
+  // partial and accessing .channel on undefined would throw and kill the command.
+  const memberVoice = msg.member?.voice?.channel as VoiceChannel | null | undefined
+  if (memberVoice) {
     ownerGuild = msg.guild || undefined
-    ownerVoice = msg.member.voice.channel as VoiceChannel
+    ownerVoice = memberVoice
   } else if (START_AUDIO) {
     for (const [, g] of msg.client.guilds.cache) {
       if (msg.guild && g.id === msg.guild.id) continue
       try {
         const m = await g.members.fetch(msg.author.id)
-        if (m.voice.channel) {
+        const vc = m?.voice?.channel as VoiceChannel | null | undefined
+        if (vc) {
           ownerGuild = g
-          ownerVoice = m.voice.channel as VoiceChannel
+          ownerVoice = vc
           console.log(`[COMMAND] Found you in voice: ${ownerVoice.name} (${g.name})`)
           break
         }
@@ -189,7 +193,7 @@ async function handleMessageCreate(msg: Message): Promise<void> {
       // Local move: always the message's own server.
       const localGuild = msg.guild || undefined
       if (!localGuild) { await replySoft(msg, "that one only works in a server, not DMs~"); return }
-      const localVoice = (msg.member?.voice.channel as VoiceChannel) || null
+      const localVoice = (msg.member?.voice?.channel as VoiceChannel) || null
       const localQueue = queues.get(localGuild.id)
       await handleSync(msg, args, localGuild, localVoice, localQueue)
       return
@@ -198,7 +202,7 @@ async function handleMessageCreate(msg: Message): Promise<void> {
       // Local move: always the message's own server.
       const localGuild = msg.guild || undefined
       if (!localGuild) { await replySoft(msg, "that one only works in a server, not DMs~"); return }
-      const localVoice = (msg.member?.voice.channel as VoiceChannel) || null
+      const localVoice = (msg.member?.voice?.channel as VoiceChannel) || null
       const localQueue = queues.get(localGuild.id)
       await handleJoin(msg, args, localGuild, localVoice, localQueue)
       return

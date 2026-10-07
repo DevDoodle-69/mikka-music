@@ -232,7 +232,7 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
   } catch (err) {
     console.error("[music] mp3 API failed, falling back to yt-dlp stream:", (err as Error).message)
     await tellChannel(queue, `first try flopped~ let me try another way for **${song.title}**`)
-    queue.currentTempFile = null
+    dropTemp(queue)
     audio = pipeYtdlp(song.url)
   }
 
