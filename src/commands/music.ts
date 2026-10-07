@@ -4,7 +4,7 @@ import fs from "fs"
 import { Message, Guild, VoiceChannel, MessageAttachment } from "selfbotsdk-discordjs"
 import { queues, saveState, createDefaultQueue } from "../core/queue"
 import { playSong } from "../core/player"
-import { searchSong } from "../services/youtube"
+import { searchSong, resolveUrlSong } from "../services/youtube"
 import { formatDuration } from "../utils/format"
 import config from "../config"
 import { Queue, PlaylistVideoEntry, Song } from "../types"
@@ -128,7 +128,8 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
       }
     } else {
       try {
-        const songData = await searchSong(url)
+        // Direct links bypass yt-dlp entirely (no YouTube bot wall)
+        const songData = await resolveUrlSong(url)
         songs.push({
           title: songData.title,
           url: songData.url,

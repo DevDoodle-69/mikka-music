@@ -2,6 +2,7 @@ import { spawn } from "child_process"
 import fs from "fs"
 import config from "../config"
 import { YouTubeSearchResult } from "../types"
+import { extractYouTubeVideoId } from "../utils/format"
 
 async function searchSong(query: string): Promise<YouTubeSearchResult> {
   const searchQuery = query.startsWith("https://") ? query : `ytsearch:${query}`
@@ -57,4 +58,35 @@ async function searchSong(query: string): Promise<YouTubeSearchResult> {
   })
 }
 
-export { searchSong }
+export { searchSong, resolveUrlSong }
+
+/**
+ * Resolve a direct YouTube video URL to a playable song WITHOUT yt-dlp.
+ * YouTube's bot wall ("Sign in to confirm you're not a bot") kills yt-dlp
+ * on datacenter IPs, but oEmbed needs no auth. The MP3 downloader API
+ * supplies the real title/duration later at play time anyway.
+ */
+async function resolveUrlSong(url: string): Promise<YouTubeSearchResult> {
+  const videoId = extractYouTubeVideoId(url)
+  if (!videoId) {
+    // Not a YouTube URL — fall back to yt-dlp for other sites.
+    return searchSong(url)
+  }
+
+  const watchUrl = `https://www.youtube.com/watch?v=${videoId}`
+  let title = "YouTube video"
+
+  try {
+    const res = await fetch(
+      `https://www.youtube.com/oembed?url=${encodeURIComponent(watchUrl)}&format=json`
+    )
+    if (res.ok) {
+      const data = (await res.json()) as { title?: string }
+      if (data && data.title) title = data.title
+    }
+  } catch {
+    // oEmbed failed — keep fallback title, MP3 API will correct it later
+  }
+
+  return { title, url: watchUrl, duration: 0, durationFormatted: undefined }
+}
