@@ -34,19 +34,23 @@ async function resolveMp3(youtubeUrl: string): Promise<Mp3ResolveResult> {
 
   const deadline = Date.now() + 120_000
   let lastNote = "waiting"
+  let attempt = 0
 
   while (Date.now() < deadline) {
+    attempt++
     let json: any
     try {
-      const res = await fetch(apiUrl)
+      const res = await fetch(apiUrl, { signal: AbortSignal.timeout(20000) })
       if (!res.ok) {
         lastNote = `HTTP ${res.status}`
+        console.log(`[mp3] poll #${attempt}: ${lastNote}`)
         await sleep(2500)
         continue
       }
       json = await res.json()
     } catch (err) {
       lastNote = (err as Error).message || "request failed"
+      console.log(`[mp3] poll #${attempt}: ${lastNote}`)
       await sleep(2500)
       continue
     }
@@ -54,6 +58,7 @@ async function resolveMp3(youtubeUrl: string): Promise<Mp3ResolveResult> {
     const data = json?.data
     const result = data?.result
     if (json?.status === true && data?.status === "Success" && result?.status === "ok" && result?.link) {
+      console.log(`[mp3] ready: "${result.title}" (${result.duration}s), downloading...`)
       return {
         title: result.title || "Unknown title",
         duration: typeof result.duration === "number" ? result.duration : 0,
@@ -66,7 +71,8 @@ async function resolveMp3(youtubeUrl: string): Promise<Mp3ResolveResult> {
       throw new Error(`Downloader API failed: ${result?.msg || json?.message || "unknown error"}`)
     }
 
-    lastNote = result?.msg || `progress ${result?.progress ?? 0}%`
+    lastNote = result?.msg || data?.status || `progress ${result?.progress ?? 0}%`
+    console.log(`[mp3] poll #${attempt}: ${lastNote}`)
     await sleep(2500)
   }
 
@@ -100,6 +106,7 @@ async function downloadOne(url: string): Promise<string> {
     `mikka-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp3`
   )
 
+  console.log(`[mp3] downloading from ${url.slice(0, 70)}...`)
   const res = await fetch(url)
   if (!res.ok || !res.body) {
     throw new Error(`HTTP ${res.status}`)
@@ -108,6 +115,7 @@ async function downloadOne(url: string): Promise<string> {
   await pipeline(Readable.fromWeb(res.body as any), fs.createWriteStream(tmpPath))
 
   const size = fs.statSync(tmpPath).size
+  console.log(`[mp3] downloaded ${(size / 1024 / 1024).toFixed(2)} MB -> ${tmpPath}`)
   if (size < 1024) {
     fs.unlinkSync(tmpPath)
     throw new Error(`file too small (${size} bytes), probably an error page`)

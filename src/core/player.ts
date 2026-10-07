@@ -208,6 +208,7 @@ async function playSong(guild: any, song: Song | undefined): Promise<void> {
   }
 
   queue.currentTempFile = tmpPath
+  console.log(`[music] audio file ready, spawning ffmpeg for "${song.title}"`)
 
   const startedAt = seekTime
     ? new Date(Date.now() - seekTime * 1000).toISOString()
