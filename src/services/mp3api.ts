@@ -19,7 +19,9 @@ function sleep(ms: number): Promise<void> {
 
 /**
  * Ask the MP3 downloader API to convert a YouTube URL into a direct mp3
- * link. Polls until the conversion is done (or times out).
+ * link. The API is task-based: the first call returns { taskId, pollUrl }
+ * with status "Pending" (sometimes the result is inline instead), then we
+ * poll the pollUrl until the result is ready.
  */
 async function resolveMp3(youtubeUrl: string): Promise<Mp3ResolveResult> {
   if (!config.mp3ApiKey) {
@@ -32,51 +34,68 @@ async function resolveMp3(youtubeUrl: string): Promise<Mp3ResolveResult> {
     `${config.mp3ApiBase}?apikey=${encodeURIComponent(config.mp3ApiKey)}` +
     `&url=${encodeURIComponent(youtubeUrl)}&type=mp3`
 
-  const deadline = Date.now() + 120_000
-  let lastNote = "waiting"
+  console.log("[mp3] requesting conversion...")
+  const first = await fetchJson(apiUrl, "initial request")
+  const inline = extractResult(first)
+  if (inline) return inline
+
+  // Task-based flow: poll the provided pollUrl (fall back to the
+  // initial URL, which may flip to Success once the task completes).
+  const pollUrl: string = first?.data?.pollUrl || apiUrl
+  console.log(`[mp3] task ${first?.data?.taskId || ""} pending, polling ${pollUrl.slice(0, 60)}...`)
+
+  const deadline = Date.now() + 180_000
+  let lastNote = first?.data?.status || "pending"
   let attempt = 0
 
   while (Date.now() < deadline) {
     attempt++
     let json: any
     try {
-      const res = await fetch(apiUrl, { signal: AbortSignal.timeout(20000) })
-      if (!res.ok) {
-        lastNote = `HTTP ${res.status}`
-        console.log(`[mp3] poll #${attempt}: ${lastNote}`)
-        await sleep(2500)
-        continue
-      }
-      json = await res.json()
+      json = await fetchJson(pollUrl, `poll #${attempt}`)
     } catch (err) {
-      lastNote = (err as Error).message || "request failed"
+      lastNote = (err as Error).message
       console.log(`[mp3] poll #${attempt}: ${lastNote}`)
       await sleep(2500)
       continue
     }
 
+    const res = extractResult(json)
+    if (res) return res
+
     const data = json?.data
-    const result = data?.result
-    if (json?.status === true && data?.status === "Success" && result?.status === "ok" && result?.link) {
-      console.log(`[mp3] ready: "${result.title}" (${result.duration}s), downloading...`)
-      return {
-        title: result.title || "Unknown title",
-        duration: typeof result.duration === "number" ? result.duration : 0,
-        link: result.link as string,
-        proxyUrl: result.proxyUrl as string | undefined
-      }
+    if (json?.status === false || data?.status === "Failed" || data?.result?.status === "error") {
+      throw new Error(`Downloader API failed: ${data?.result?.msg || json?.message || "unknown error"}`)
     }
 
-    if (json?.status === false || data?.status === "Failed" || result?.status === "error") {
-      throw new Error(`Downloader API failed: ${result?.msg || json?.message || "unknown error"}`)
-    }
-
-    lastNote = result?.msg || data?.status || `progress ${result?.progress ?? 0}%`
+    lastNote = data?.result?.msg || data?.status || `progress ${data?.result?.progress ?? 0}%`
     console.log(`[mp3] poll #${attempt}: ${lastNote}`)
     await sleep(2500)
   }
 
   throw new Error(`MP3 conversion timed out (${lastNote})`)
+}
+
+/** Pull the finished result out of an API response, or null if not ready. */
+function extractResult(json: any): Mp3ResolveResult | null {
+  const data = json?.data
+  const result = data?.result
+  if (json?.status === true && data?.status === "Success" && result?.status === "ok" && result?.link) {
+    console.log(`[mp3] ready: "${result.title}" (${result.duration}s), downloading...`)
+    return {
+      title: result.title || "Unknown title",
+      duration: typeof result.duration === "number" ? result.duration : 0,
+      link: result.link as string,
+      proxyUrl: result.proxyUrl as string | undefined
+    }
+  }
+  return null
+}
+
+async function fetchJson(url: string, label: string): Promise<any> {
+  const res = await fetch(url, { signal: AbortSignal.timeout(20000) })
+  if (!res.ok) throw new Error(`${label}: HTTP ${res.status}`)
+  return res.json()
 }
 
 /**
