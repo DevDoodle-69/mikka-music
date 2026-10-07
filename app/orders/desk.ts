@@ -16,8 +16,8 @@ async function handleMessageCreate(msg: Message): Promise<void> {
   //   ?play shape of you             (classic prefix)
   const botId = msg.client.user?.id
   let body = msg.content
-  if (botId && new RegExp(`^<@!?${botId}>\\s*`).test(body)) {
-    body = body.replace(new RegExp(`^<@!?${botId}>\\s*`), "")
+  if (botId && new RegExp("^<@!?" + botId + ">\\s*").test(body)) {
+    body = body.replace(new RegExp("^<@!?" + botId + ">\\s*"), "")
   } else if (body.startsWith(config.prefix)) {
     body = body.slice(config.prefix.length)
   } else {
