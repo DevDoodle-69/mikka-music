@@ -196,10 +196,11 @@ async function playSong(guild: any, song: Song | undefined): Promise<void> {
       song.duration = mp3.duration
       song.durationFormatted = formatDuration(mp3.duration)
     }
-    tmpPath = await downloadMp3(mp3.link)
+    tmpPath = await downloadMp3(mp3.link, mp3.proxyUrl)
   } catch (err) {
-    console.error("[music] mp3 resolve/download failed:", (err as Error).message)
-    await sendToTextChannel(queue, `Could not fetch audio for **${song.title}**. Skipping to the next song...`)
+    const reason = (err as Error).message
+    console.error("[music] mp3 resolve/download failed:", reason)
+    await sendToTextChannel(queue, `Could not fetch audio for **${song.title}** (${reason}). Skipping to the next song...`)
     queue.songs.shift()
     queue.playing = false
     playSong(guild, queue.songs[0])

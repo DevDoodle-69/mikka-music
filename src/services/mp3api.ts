@@ -10,6 +10,7 @@ interface Mp3ResolveResult {
   title: string
   duration: number // seconds
   link: string
+  proxyUrl?: string
 }
 
 function sleep(ms: number): Promise<void> {
@@ -56,7 +57,8 @@ async function resolveMp3(youtubeUrl: string): Promise<Mp3ResolveResult> {
       return {
         title: result.title || "Unknown title",
         duration: typeof result.duration === "number" ? result.duration : 0,
-        link: result.link as string
+        link: result.link as string,
+        proxyUrl: result.proxyUrl as string | undefined
       }
     }
 
@@ -72,21 +74,45 @@ async function resolveMp3(youtubeUrl: string): Promise<Mp3ResolveResult> {
 }
 
 /**
- * Download the mp3 link to a temp file. Returns the temp file path.
+ * Download the mp3 to a temp file. Tries the direct link first,
+ * then the API's proxy URL as a fallback. Returns the temp file path.
  * The caller is responsible for deleting it via cleanupTempFile().
  */
-async function downloadMp3(link: string): Promise<string> {
+async function downloadMp3(link: string, proxyUrl?: string): Promise<string> {
+  const urls = [link, ...(proxyUrl ? [proxyUrl] : [])]
+  let lastError = "no URL"
+
+  for (const url of urls) {
+    try {
+      return await downloadOne(url)
+    } catch (err) {
+      lastError = (err as Error).message
+      console.error(`[music] mp3 download failed (${lastError})`)
+    }
+  }
+
+  throw new Error(`MP3 download failed (${lastError})`)
+}
+
+async function downloadOne(url: string): Promise<string> {
   const tmpPath = path.join(
     os.tmpdir(),
     `mikka-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp3`
   )
 
-  const res = await fetch(link)
+  const res = await fetch(url)
   if (!res.ok || !res.body) {
-    throw new Error(`MP3 download failed (HTTP ${res.status})`)
+    throw new Error(`HTTP ${res.status}`)
   }
 
   await pipeline(Readable.fromWeb(res.body as any), fs.createWriteStream(tmpPath))
+
+  const size = fs.statSync(tmpPath).size
+  if (size < 1024) {
+    fs.unlinkSync(tmpPath)
+    throw new Error(`file too small (${size} bytes), probably an error page`)
+  }
+
   return tmpPath
 }
 
