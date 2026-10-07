@@ -1,6 +1,7 @@
 import { Message, TextChannel, MessageReaction, ReactionCollector, User } from "selfbotsdk-discordjs"
 import { Queue } from "../types"
 import { sendHuman } from "../utils/send"
+import { cleanupTempFile } from "../services/mp3api"
 
 async function removeAllReactionsFromChannel(channel: TextChannel): Promise<void> {
   try {
@@ -96,8 +97,9 @@ async function createReactionUI(message: Message, queue: Queue): Promise<Reactio
       case "⏭":
         queue.isSkipping = true
         if (queue.currentProcesses) {
-          queue.currentProcesses.ytdlp.kill()
+          queue.currentProcesses.ytdlp?.kill()
           queue.currentProcesses.ff.kill()
+          cleanupTempFile(queue)
         }
         queue.player.stop()
         break
@@ -120,8 +122,9 @@ async function createReactionUI(message: Message, queue: Queue): Promise<Reactio
 
       case "⏹":
         if (queue.currentProcesses) {
-          queue.currentProcesses.ytdlp.kill()
+          queue.currentProcesses.ytdlp?.kill()
           queue.currentProcesses.ff.kill()
+          cleanupTempFile(queue)
         }
         if (queue.radioFfmpeg) queue.radioFfmpeg.kill()
         queue.songs = []
@@ -216,8 +219,9 @@ Replace @bot with a mention of the bot, or use the ? prefix instead.`
           const popped = queue.songs.pop()
           if (popped) queue.songs.unshift(popped)
           if (queue.currentProcesses) {
-            queue.currentProcesses.ytdlp.kill()
+            queue.currentProcesses.ytdlp?.kill()
             queue.currentProcesses.ff.kill()
+            cleanupTempFile(queue)
           }
           queue.player.stop()
           sendHuman(message.channel as any, "Playing previous song")
@@ -239,8 +243,9 @@ Replace @bot with a mention of the bot, or use the ? prefix instead.`
       case "⏭":
         queue.isSkipping = true
         if (queue.currentProcesses) {
-          queue.currentProcesses.ytdlp.kill()
+          queue.currentProcesses.ytdlp?.kill()
           queue.currentProcesses.ff.kill()
+          cleanupTempFile(queue)
         }
         queue.player.stop()
         sendHuman(message.channel as any, "Skipped")
@@ -264,8 +269,9 @@ Replace @bot with a mention of the bot, or use the ? prefix instead.`
 
       case "⏹":
         if (queue.currentProcesses) {
-          queue.currentProcesses.ytdlp.kill()
+          queue.currentProcesses.ytdlp?.kill()
           queue.currentProcesses.ff.kill()
+          cleanupTempFile(queue)
         }
         if (queue.radioFfmpeg) queue.radioFfmpeg.kill()
         queue.songs = []
@@ -291,8 +297,9 @@ Replace @bot with a mention of the bot, or use the ? prefix instead.`
       case "📻":
         if (queue.radioUrl && queue.radioName) {
           if (queue.currentProcesses) {
-            queue.currentProcesses.ytdlp.kill()
+            queue.currentProcesses.ytdlp?.kill()
             queue.currentProcesses.ff.kill()
+            cleanupTempFile(queue)
           }
           queue.radioStopped = false
           sendHuman(message.channel as any, "Switching back to radio mode")

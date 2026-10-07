@@ -9,6 +9,7 @@ import { setPlaySongFunction, setPlayRadioFunction } from "./ui/reactions"
 import { joinVoiceChannel, createAudioPlayer } from "@discordjs/voice"
 import { Queue } from "./types"
 import { sendToTextChannel } from "./utils/send"
+import { cleanupTempFile } from "./services/mp3api"
 
 const client = new Client()
 setClient(client)
@@ -18,8 +19,9 @@ function gracefulShutdown(signal: string): void {
   for (const [, queue] of queues) {
     if (queue.radioFfmpeg) queue.radioFfmpeg.kill()
     if (queue.currentProcesses) {
-      queue.currentProcesses.ytdlp.kill()
+      queue.currentProcesses.ytdlp?.kill()
       queue.currentProcesses.ff.kill()
+      cleanupTempFile(queue)
     }
     if (queue.metadataDetector) queue.metadataDetector.stop()
   }

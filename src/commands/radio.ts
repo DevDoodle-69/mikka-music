@@ -5,6 +5,7 @@ import { playRadio } from "../core/player"
 import { resolveRadioMetadata } from "../services/radio"
 import { Queue } from "../types"
 import { sendMsg } from "../utils/send"
+import { cleanupTempFile } from "../services/mp3api"
 
 async function handleRadio(msg: Message, args: string[], guild: Guild, voice: VoiceChannel | null, queue: Queue | undefined): Promise<void> {
   const query = args.join(" ")
@@ -56,8 +57,9 @@ async function handleRadio(msg: Message, args: string[], guild: Guild, voice: Vo
     }
 
     if (queue.currentProcesses) {
-      queue.currentProcesses.ytdlp.kill()
+      queue.currentProcesses.ytdlp?.kill()
       queue.currentProcesses.ff.kill()
+      cleanupTempFile(queue)
     }
 
     playRadio(guild, radio.url, radio.name)

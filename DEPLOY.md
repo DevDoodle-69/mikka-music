@@ -38,6 +38,19 @@ and plays music from YouTube, controlled by mentioning it.
 
 Replace `@bot` with an actual mention of the account.
 
+## How playback works
+
+YouTube blocks datacenter IPs, so the bot does **not** stream from YouTube
+directly. Instead:
+
+1. `?play <name>` / `@bot play <name>` searches YouTube (via yt-dlp) to
+   find the video URL.
+2. Your MP3 downloader API converts that URL to a direct mp3 link
+   (polled until ready).
+3. The bot downloads the mp3 to temp storage, then plays the local file
+   through ffmpeg into the voice channel.
+4. The temp file is deleted when the song ends, is skipped, or is stopped.
+
 ## Configuration
 
 The bot reads `config.json` (see `config.example.json`):
@@ -55,9 +68,11 @@ The bot reads `config.json` (see `config.example.json`):
   and the bot auto-follows this ID into voice channels.
   Yours: `1306646391325589529`
 - `prefix` — fallback prefix, default `?`.
+- `mp3ApiKey` — your YouTube MP3 downloader API key (required for playback).
 
-Environment variables (`DISCORD_TOKEN`, `OWNER_ID`, `DISCORD_PREFIX`)
-override `config.json` when set. **Never commit a real token to git.**
+Environment variables (`DISCORD_TOKEN`, `OWNER_ID`, `DISCORD_PREFIX`,
+`MP3_API_KEY`, `MP3_API_BASE`) override `config.json` when set.
+**Never commit a real token or API key to git.**
 
 ## Run on Render (example)
 
@@ -70,6 +85,7 @@ This repo ships with a `render.yaml` blueprint and a `Dockerfile`
 3. In **Environment**, add:
    - `DISCORD_TOKEN` = your Discord user token
    - `OWNER_ID` = `1306646391325589529`
+   - `MP3_API_KEY` = your downloader API key
    - `DISCORD_PREFIX` = `?` (optional)
 4. Deploy. In the logs look for `Logged in as <your tag>`.
 5. Join any voice channel — the bot follows you in instantly.
@@ -93,6 +109,6 @@ Needs `ffmpeg` and `yt-dlp` on PATH for local runs
 
 - **Self-bots violate Discord's Terms of Service** and can get the
   account banned. An alt account is safer than your main.
-- If YouTube blocks playback from a datacenter IP, add a `cookies.txt`
+- If YouTube search starts failing from Render's IP, add a `cookies.txt`
   (exported from your logged-in browser) next to `config.json` —
-  the bot picks it up automatically.
+  the bot picks it up automatically for searches.

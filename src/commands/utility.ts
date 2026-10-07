@@ -6,6 +6,7 @@ import { removeAllReactionsFromChannel, createCommandPanel } from "../ui/reactio
 import config from "../config"
 import { Queue } from "../types"
 import { sendMsg, replyHuman, sendHuman } from "../utils/send"
+import { cleanupTempFile } from "../services/mp3api"
 
 function handleTest(msg: Message): Promise<Message> {
   console.log("Test : ", msg)
@@ -54,8 +55,9 @@ async function handleLeave(msg: Message, guild: Guild | undefined, queue: Queue 
   }
 
   if (queue.currentProcesses) {
-    queue.currentProcesses.ytdlp.kill()
+    queue.currentProcesses.ytdlp?.kill()
     queue.currentProcesses.ff.kill()
+    cleanupTempFile(queue)
   }
   if (queue.radioFfmpeg) queue.radioFfmpeg.kill()
   if (queue.metadataDetector) {

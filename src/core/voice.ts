@@ -4,6 +4,7 @@ import { queues, saveState, createDefaultQueue } from "./queue"
 import { playSong, playRadio } from "./player"
 import { sendToTextChannel } from "../utils/send"
 import config from "../config"
+import { cleanupTempFile } from "../services/mp3api"
 
 let clientRef: Client | null = null
 
@@ -218,8 +219,9 @@ function registerVoiceStateUpdateHandler(): void {
               queue.connection = null
 
               if (queue.currentProcesses) {
-                queue.currentProcesses.ytdlp.kill()
+                queue.currentProcesses.ytdlp?.kill()
                 queue.currentProcesses.ff.kill()
+                cleanupTempFile(queue)
               }
               if (queue.radioFfmpeg) queue.radioFfmpeg.kill()
               if (queue.metadataDetector) {

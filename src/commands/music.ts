@@ -9,6 +9,7 @@ import { formatDuration } from "../utils/format"
 import config from "../config"
 import { Queue, PlaylistVideoEntry, Song } from "../types"
 import { sendMsg, stripEmojis } from "../utils/send"
+import { cleanupTempFile } from "../services/mp3api"
 
 interface PlaylistJSON {
   entries: Array<{
@@ -224,8 +225,9 @@ async function handleSkip(msg: Message, queue: Queue | undefined): Promise<void>
   if (queue) {
     queue.isSkipping = true
     if (queue.currentProcesses) {
-      queue.currentProcesses.ytdlp.kill()
+      queue.currentProcesses.ytdlp?.kill()
       queue.currentProcesses.ff.kill()
+      cleanupTempFile(queue)
     }
     queue.player.stop()
     saveState()
@@ -316,8 +318,9 @@ async function handleStop(msg: Message, queue: Queue | undefined): Promise<void>
   }
 
   if (queue.currentProcesses) {
-    queue.currentProcesses.ytdlp.kill()
+    queue.currentProcesses.ytdlp?.kill()
     queue.currentProcesses.ff.kill()
+    cleanupTempFile(queue)
   }
   if (queue.radioFfmpeg) queue.radioFfmpeg.kill()
   if (queue.metadataDetector) {

@@ -1,50 +1,41 @@
 import { createAudioResource, AudioPlayerStatus, StreamType } from "@discordjs/voice"
 import { spawn } from "child_process"
 import { Readable } from "stream"
-import fs from "fs"
 import config from "../config"
 import { queues, saveState } from "./queue"
 import { Song, Processes } from "../types"
 import { sendToTextChannel } from "../utils/send"
+import { formatDuration } from "../utils/format"
+import { resolveMp3, downloadMp3, cleanupTempFile } from "../services/mp3api"
 
 interface StreamWithProcesses extends Readable {
   processes: Processes
 }
 
-function stream(url: string, seekTime: number | null = null): StreamWithProcesses {
-  const ytdlpArgs: string[] = ["-f", "bestaudio", "-o", "-"]
-
-  if (fs.existsSync(config.cookiesFile)) {
-    ytdlpArgs.push("--cookies", config.cookiesFile)
-  }
+/**
+ * Play a downloaded mp3 file through ffmpeg -> opus.
+ * Replaces the old yt-dlp live pipe (YouTube blocks datacenter IPs,
+ * so audio now comes from the MP3 downloader API as a temp file).
+ */
+function streamFile(filePath: string, seekTime: number | null = null): StreamWithProcesses {
+  const ffArgs: string[] = []
 
   if (seekTime) {
     const hh = Math.floor(seekTime / 3600)
     const mm = Math.floor((seekTime % 3600) / 60)
     const ss = Math.floor(seekTime % 60)
-    const seekStr = `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`
-    ytdlpArgs.push("--download-sections", `*${seekStr}-`)
+    ffArgs.push("-ss", `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`)
   }
 
-  ytdlpArgs.push(url)
-
-  const ytdlp = spawn(config.ytdlpExecutable, ytdlpArgs)
-
-  const ff = spawn(config.ffmpeg, [
-    "-i", "pipe:0",
+  ffArgs.push(
+    "-i", filePath,
     "-f", "opus",
     "-ar", "48000",
     "-ac", "2",
     "pipe:1"
-  ])
+  )
 
-  ytdlp.stdout!.pipe(ff.stdin!)
-
-  ytdlp.stderr!.on("data", (data: Buffer) => { console.error("yt-dlp stderr:", data.toString()) })
-  ytdlp.on("error", (err: Error) => { console.error("yt-dlp error:", err) })
-  ytdlp.on("close", (code: number | null) => {
-    if (code !== 0 && code !== null) console.error("yt-dlp exited with code:", code)
-  })
+  const ff = spawn(config.ffmpeg, ffArgs)
 
   ff.stderr!.on("data", (data: Buffer) => { console.error("ffmpeg stderr:", data.toString()) })
   ff.on("error", (err: Error) => { console.error("ffmpeg error:", err) })
@@ -53,7 +44,7 @@ function stream(url: string, seekTime: number | null = null): StreamWithProcesse
   })
 
   const outStream = ff.stdout as unknown as StreamWithProcesses
-  outStream.processes = { ytdlp, ff }
+  outStream.processes = { ff }
   return outStream
 }
 
@@ -143,9 +134,10 @@ async function playSong(guild: any, song: Song | undefined): Promise<void> {
 
   if (!song) {
     queue.playing = false
+    cleanupTempFile(queue)
 
     if (queue.currentProcesses) {
-      queue.currentProcesses.ytdlp.kill()
+      queue.currentProcesses.ytdlp?.kill()
       queue.currentProcesses.ff.kill()
     }
     if (queue.reactionCollector && typeof queue.reactionCollector.stop === "function") {
@@ -181,9 +173,10 @@ async function playSong(guild: any, song: Song | undefined): Promise<void> {
   }
 
   if (queue.currentProcesses) {
-    queue.currentProcesses.ytdlp.kill()
+    queue.currentProcesses.ytdlp?.kill()
     queue.currentProcesses.ff.kill()
   }
+  cleanupTempFile(queue)
 
   let seekTime: number | null = null
   if (song.resumeFrom) {
@@ -191,6 +184,29 @@ async function playSong(guild: any, song: Song | undefined): Promise<void> {
     console.log(`Resuming from ${seekTime} seconds`)
     delete song.resumeFrom
   }
+
+  // Resolve the YouTube URL to a direct mp3 via the downloader API,
+  // then download it to temp storage before playing.
+  let tmpPath: string
+  try {
+    await sendToTextChannel(queue, `Fetching audio for **${song.title}**...`)
+    const mp3 = await resolveMp3(song.url)
+    if (mp3.title && mp3.title !== "Unknown title") song.title = mp3.title
+    if (mp3.duration > 0) {
+      song.duration = mp3.duration
+      song.durationFormatted = formatDuration(mp3.duration)
+    }
+    tmpPath = await downloadMp3(mp3.link)
+  } catch (err) {
+    console.error("[music] mp3 resolve/download failed:", (err as Error).message)
+    await sendToTextChannel(queue, `Could not fetch audio for **${song.title}**. Skipping to the next song...`)
+    queue.songs.shift()
+    queue.playing = false
+    playSong(guild, queue.songs[0])
+    return
+  }
+
+  queue.currentTempFile = tmpPath
 
   const startedAt = seekTime
     ? new Date(Date.now() - seekTime * 1000).toISOString()
@@ -202,41 +218,23 @@ async function playSong(guild: any, song: Song | undefined): Promise<void> {
     isRadio: false
   }
 
-  const audio = stream(song.url, seekTime)
+  const audio = streamFile(tmpPath, seekTime)
 
   const resource = createAudioResource(audio, { inlineVolume: true })
   resource.volume?.setVolume(queue.volume ?? 1.0)
 
   queue.currentProcesses = audio.processes
 
-  audio.processes.ytdlp.on("error", (err: Error) => {
-    if (queue.currentProcesses?.ytdlp !== audio.processes.ytdlp) return
-    console.error("yt-dlp error:", err)
-    if (!queue.isMusicReconnecting && !queue.radioStopped) {
-      handleMusicStreamingError(guild, song, "yt-dlp", err)
-    }
-  })
-
   audio.processes.ff.on("error", (err: Error) => {
-    if (queue.currentProcesses?.ff !== audio.processes.ff) return
+    if (queue.currentProcesses !== audio.processes) return
     console.error("ffmpeg error:", err)
     if (!queue.isMusicReconnecting && !queue.radioStopped) {
       handleMusicStreamingError(guild, song, "ffmpeg", err)
     }
   })
 
-  audio.processes.ytdlp.on("close", (code: number | null) => {
-    if (queue.currentProcesses?.ytdlp !== audio.processes.ytdlp) return
-    if (code !== 0 && code !== null && !queue.isMusicReconnecting && !queue.radioStopped) {
-      console.error("yt-dlp exited with code:", code)
-      const error = new Error(`yt-dlp exited with code ${code}`)
-      ;(error as NodeJS.ErrnoException).code = String(code)
-      handleMusicStreamingError(guild, song, "yt-dlp", error)
-    }
-  })
-
   audio.processes.ff.on("close", (code: number | null) => {
-    if (queue.currentProcesses?.ff !== audio.processes.ff) return
+    if (queue.currentProcesses !== audio.processes) return
     if (code !== 0 && code !== null && !queue.isMusicReconnecting && !queue.radioStopped) {
       console.error("ffmpeg exited with code:", code)
       const error = new Error(`ffmpeg exited with code ${code}`)
@@ -286,9 +284,10 @@ async function playSong(guild: any, song: Song | undefined): Promise<void> {
     }
 
     if (queue.currentProcesses) {
-      queue.currentProcesses.ytdlp.kill()
+      queue.currentProcesses.ytdlp?.kill()
       queue.currentProcesses.ff.kill()
     }
+    cleanupTempFile(queue)
 
     if (queue.isMusicReconnecting) {
       queue.playing = false
@@ -513,4 +512,4 @@ async function playRadio(guild: any, radioUrl: string, radioName: string): Promi
   }
 }
 
-export { stream, playSong, playRadio, handleMusicStreamingError }
+export { streamFile, playSong, playRadio, handleMusicStreamingError }

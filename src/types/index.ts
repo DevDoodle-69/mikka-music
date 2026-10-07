@@ -29,7 +29,7 @@ export interface CurrentSong {
 }
 
 export interface Processes {
-  ytdlp: ChildProcess
+  ytdlp?: ChildProcess
   ff: ChildProcess
 }
 
@@ -75,6 +75,7 @@ export interface Queue {
   player: AudioPlayer
   currentSong?: CurrentSong
   currentProcesses?: Processes
+  currentTempFile?: string | null
   reactionMessage?: Message
   reactionCollector: ReactionCollector | null
   panelMessage?: Message
@@ -106,6 +107,8 @@ export interface Config {
   ffmpeg: string
   stateFile: string
   cookiesFile: string
+  mp3ApiBase: string
+  mp3ApiKey: string
 }
 
 export interface PlaylistVideoEntry {
