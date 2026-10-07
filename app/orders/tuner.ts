@@ -1,6 +1,6 @@
 import { joinVoiceChannel, createAudioPlayer } from "@discordjs/voice"
 import { Message, Guild, VoiceChannel } from "selfbotsdk-discordjs"
-import { queues, saveState, createDefaultQueue } from "../voice/shelf"
+import { queues, saveState, createDefaultQueue, isConnectionLive } from "../voice/shelf"
 import { playStation } from "../voice/jukebox"
 import { resolveRadioMetadata } from "../web/airwaves"
 import { Queue } from "../types"
@@ -22,11 +22,12 @@ async function handleRadio(msg: Message, args: string[], guild: Guild, voice: Vo
 
     await tellUser(msg, queue, `found **${radio.name}**${radio.country ? ` (${radio.country})` : ""}~ tuning in`)
 
-    if (!queue) {
+    if (!queue || !isConnectionLive(queue)) {
       if (!voice) {
         await tellUser(msg, queue, "join a voice channel first, silly~")
         return
       }
+      try { queue?.connection?.destroy() } catch {}
       const connection = joinVoiceChannel({
         channelId: voice.id,
         guildId: guild.id,
@@ -35,7 +36,7 @@ async function handleRadio(msg: Message, args: string[], guild: Guild, voice: Vo
         selfMute: false
       })
 
-      const player = createAudioPlayer()
+      const player = queue?.player ?? createAudioPlayer()
       connection.subscribe(player)
 
       const playbackChannel = (msg.channel as any).guild
@@ -45,15 +46,23 @@ async function handleRadio(msg: Message, args: string[], guild: Guild, voice: Vo
             return ch.isTextBased && ch.type === 0
           }) || voice.guild.channels.cache.first())
 
-      queue = createDefaultQueue({
-        textChannel: playbackChannel as any,
-        connection,
-        player,
-        voiceChannelId: voice.id,
-        userId: msg.author.id
-      })
+      if (!queue) {
+        queue = createDefaultQueue({
+          textChannel: playbackChannel as any,
+          connection,
+          player,
+          voiceChannelId: voice.id,
+          userId: msg.author.id
+        })
 
-      queues.set(guild.id, queue)
+        queues.set(guild.id, queue)
+      } else {
+        queue.connection = connection
+        queue.player = player
+        queue.voiceChannelId = voice.id
+        queue.textChannel = playbackChannel as any
+        queue.userId = msg.author.id
+      }
     }
 
     if (queue.currentProcesses) {

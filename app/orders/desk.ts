@@ -1,6 +1,7 @@
+import { AudioPlayerStatus } from "@discordjs/voice"
 import { Message, Guild, VoiceChannel } from "selfbotsdk-discordjs"
 import config from "../setup"
-import { queues } from "../voice/shelf"
+import { queues, isConnectionLive, markIntentionalLeave, saveState } from "../voice/shelf"
 import { handlePlay, handleSkip, handleLoop, handleShuffle, handleQueue, handleStop, handleVolume } from "./tunes"
 import { handleRadio, handleRadioStats } from "./tuner"
 import { handleTest, handleHelp, handleLeave, handleClearChat, handleClearReactions, handleSync, handleJoin, handleState, handlePanel, handleSilent } from "./handy"
@@ -30,60 +31,98 @@ async function handleMessageCreate(msg: Message): Promise<void> {
   let voice: VoiceChannel | null = null
   let queue: Queue | undefined
 
-  const liveQueueOf = (g: Guild | undefined): Queue | undefined => {
-    const q = g ? queues.get(g.id) : undefined
-    return q && q.connection ? q : undefined
-  }
+  // Where is the owner sitting in voice RIGHT NOW?
+  // - play/radio follow the owner across servers: message guild first (cheap),
+  //   then scan the other guilds (fetch) so a cross-server play lands where
+  //   they actually are.
+  // - control commands only need the message guild's voice state (cheap);
+  //   remote control rides on the bot's live session.
+  const START_AUDIO = cmd === "play" || cmd === "radio"
 
-  // 1. Live session in this guild?
-  queue = liveQueueOf(guild)
-
-  // 2. Live session ANYWHERE? Control her from DMs, inbox, or another
-  //    server — she plays in the voice channel she's already in.
-  if (!queue) {
-    for (const [gid, q] of queues) {
-      if (q.connection) {
-        const g = msg.client.guilds.cache.get(gid)
-        if (g) {
-          guild = g
-          queue = q
-          console.log(`[COMMAND] Routing to her active session in "${g.name}"`)
+  let ownerGuild: Guild | undefined
+  let ownerVoice: VoiceChannel | null = null
+  if (msg.member?.voice.channel) {
+    ownerGuild = msg.guild || undefined
+    ownerVoice = msg.member.voice.channel as VoiceChannel
+  } else if (START_AUDIO) {
+    for (const [, g] of msg.client.guilds.cache) {
+      if (msg.guild && g.id === msg.guild.id) continue
+      try {
+        const m = await g.members.fetch(msg.author.id)
+        if (m.voice.channel) {
+          ownerGuild = g
+          ownerVoice = m.voice.channel as VoiceChannel
+          console.log(`[COMMAND] Found you in voice: ${ownerVoice.name} (${g.name})`)
           break
         }
+      } catch {
+        continue
       }
     }
   }
 
-  // Best-effort: the voice channel she's sitting in.
-  if (queue && guild && !voice && queue.voiceChannelId) {
-    voice = (guild.channels.cache.get(queue.voiceChannelId) as VoiceChannel) || null
+  // Guild where she currently holds a LIVE voice connection, if any.
+  let liveGuild: Guild | undefined
+  for (const [gid, q] of queues) {
+    if (isConnectionLive(q)) {
+      const g = msg.client.guilds.cache.get(gid)
+      if (g) { liveGuild = g; break }
+    }
   }
 
-  // 3. No live session anywhere — find YOUR voice channel to start fresh.
-  if (!queue) {
-    if (!msg.member) {
-      for (const [, g] of msg.client.guilds.cache) {
-        try {
-          const member = await g.members.fetch(msg.author.id)
-          if (member.voice.channel) {
-            guild = g
-            voice = member.voice.channel as VoiceChannel
-            console.log(`[DM] Found you in voice: ${voice.name} (${g.name})`)
-            break
-          }
-        } catch {
-          continue
+  const bestEffortVoice = (g: Guild, q: Queue | undefined): VoiceChannel | null =>
+    q?.voiceChannelId ? ((g.channels.cache.get(q.voiceChannelId) as VoiceChannel) || null) : null
+
+  if (START_AUDIO) {
+    // Play follows the OWNER: wherever they sit in voice, that's the stage —
+    // even if the command came from another server, DM, or inbox.
+    if (ownerGuild && ownerVoice) {
+      // She's live somewhere else? Move her to the owner, no lingering behind.
+      if (liveGuild && liveGuild.id !== ownerGuild.id) {
+        const oldQ = queues.get(liveGuild.id)
+        if (oldQ) {
+          console.log(`[COMMAND] Moving her from "${liveGuild.name}" to "${ownerGuild.name}" for play`)
+          markIntentionalLeave(liveGuild.id)
+          try { oldQ.connection?.destroy() } catch {}
+          oldQ.connection = null
+          oldQ.voiceChannelId = null
+          try { oldQ.player.removeAllListeners(AudioPlayerStatus.Idle) } catch {}
+          try { oldQ.player.stop() } catch {}
+          saveState()
         }
       }
-    } else {
-      voice = msg.member.voice.channel as VoiceChannel | null
+      guild = ownerGuild
+      voice = ownerVoice
+      queue = queues.get(guild.id)
+    } else if (liveGuild) {
+      // Remote control: owner isn't in voice, but she's live somewhere — play there.
+      guild = liveGuild
+      queue = queues.get(guild.id)
+      voice = bestEffortVoice(guild, queue)
+      console.log(`[COMMAND] Remote play routed to her live session in "${guild.name}"`)
     }
-
-    if (!voice && cmd !== "help" && cmd !== "state" && cmd !== "test") {
-      await replySoft(msg, "join a voice channel first~ I'll follow you in")
-      return
+  } else {
+    // Control commands: her live session wins from anywhere (remote control).
+    if (liveGuild) {
+      guild = liveGuild
+      queue = queues.get(guild.id)
+      voice = bestEffortVoice(guild, queue)
+      if (msg.guild && msg.guild.id !== liveGuild.id) {
+        console.log(`[COMMAND] Routing to her active session in "${liveGuild.name}"`)
+      }
+    } else if (ownerGuild && ownerVoice) {
+      guild = ownerGuild
+      voice = ownerVoice
+      queue = queues.get(guild.id)
     }
   }
+
+  if (!queue && !["help", "state", "test", "leave"].includes(cmd) && !voice) {
+    await replySoft(msg, "join a voice channel first~ I'll follow you in")
+    return
+  }
+
+  console.log(`[RESOLVE] cmd=${cmd} guild=${guild?.name}(${guild?.id}) voice=${(voice as any)?.name}(${voice?.id}) queue=${queue ? (isConnectionLive(queue) ? "live" : "STALE") : "none"} owner=${ownerGuild?.name}(${ownerGuild?.id})`)
 
   switch (cmd) {
     case "test": {

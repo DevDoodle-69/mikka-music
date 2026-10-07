@@ -2,7 +2,7 @@ import { joinVoiceChannel, createAudioPlayer, AudioPlayerStatus } from "@discord
 import { spawn } from "child_process"
 import fs from "fs"
 import { Message, Guild, VoiceChannel, MessageAttachment } from "selfbotsdk-discordjs"
-import { queues, saveState, createDefaultQueue } from "../voice/shelf"
+import { queues, saveState, createDefaultQueue, isConnectionLive } from "../voice/shelf"
 import { playTrack } from "../voice/jukebox"
 import { findTrack, linkTrack, v3Playlist } from "../web/tube"
 import { formatDuration } from "../tools/timefmt"
@@ -189,11 +189,13 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
     return
   }
 
-  if (!queue) {
+  if (!queue || !isConnectionLive(queue)) {
     if (!voice) {
       await tellUser(msg, queue, "join a voice channel first, silly~ I can't sing to an empty room")
       return
     }
+    // Tear down any dead connection before (re)joining.
+    try { queue?.connection?.destroy() } catch {}
     const connection = joinVoiceChannel({
       channelId: voice.id,
       guildId: guild.id,
@@ -202,7 +204,7 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
       selfMute: false
     })
 
-    const player = createAudioPlayer()
+    const player = queue?.player ?? createAudioPlayer()
     connection.subscribe(player)
 
     const playbackChannel = (msg.channel as any).guild
@@ -212,15 +214,24 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
           return ch.isTextBased && ch.type === 0
         }) || voice.guild.channels.cache.first())
 
-    queue = createDefaultQueue({
-      textChannel: playbackChannel as any,
-      connection,
-      player,
-      voiceChannelId: voice.id,
-      userId: msg.author.id
-    })
+    if (!queue) {
+      queue = createDefaultQueue({
+        textChannel: playbackChannel as any,
+        connection,
+        player,
+        voiceChannelId: voice.id,
+        userId: msg.author.id
+      })
 
-    queues.set(guild.id, queue)
+      queues.set(guild.id, queue)
+    } else {
+      // Stale queue shell: revive it in the new voice channel, keep the songs.
+      queue.connection = connection
+      queue.player = player
+      queue.voiceChannelId = voice.id
+      queue.textChannel = playbackChannel as any
+      queue.userId = msg.author.id
+    }
   }
 
   if (queue.radioFfmpeg) {

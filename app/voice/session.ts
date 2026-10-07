@@ -1,4 +1,4 @@
-import { joinVoiceChannel, createAudioPlayer } from "@discordjs/voice"
+import { joinVoiceChannel, createAudioPlayer, AudioPlayerStatus } from "@discordjs/voice"
 import { Client, Guild, VoiceChannel, TextChannel } from "selfbotsdk-discordjs"
 import { queues, saveState, createDefaultQueue, markIntentionalLeave, takeIntentionalLeave } from "./shelf"
 import { playTrack, playStation } from "./jukebox"
@@ -107,15 +107,41 @@ function registerVoiceStateUpdateHandler(): void {
         const channel = newState.channel as VoiceChannel
         const channelId = channel.id
 
+        // Owner SWITCHED voice channels (A -> B, maybe cross-server): leave the
+        // old one immediately so she doesn't linger behind, then follow to the
+        // new one after the delay.
+        if (oldState.channel && oldState.channel.id !== channelId) {
+          const oldGuildId = oldState.guild.id
+          const prevPending = pendingJoins.get(oldGuildId)
+          if (prevPending) {
+            clearTimeout(prevPending)
+            pendingJoins.delete(oldGuildId)
+          }
+          const oldQueue = queues.get(oldGuildId)
+          if (oldQueue && (oldQueue.connection || oldQueue.voiceChannelId)) {
+            console.log("[AUTOJOIN] Owner switched voice channels — leaving the old one")
+            markIntentionalLeave(oldGuildId)
+            try { oldQueue.connection?.destroy() } catch {}
+            oldQueue.connection = null
+            oldQueue.voiceChannelId = null
+            try { oldQueue.player.removeAllListeners(AudioPlayerStatus.Idle) } catch {}
+            try { oldQueue.player.stop() } catch {}
+            saveState()
+          }
+        }
+
         const prev = pendingJoins.get(guild.id)
         if (prev) clearTimeout(prev)
 
         console.log(`[AUTOJOIN] Owner joined "${channel.name}" — joining in 10s`)
-        const t = setTimeout(() => {
+        const t = setTimeout(async () => {
           pendingJoins.delete(guild.id)
           try {
-            // Still there? Don't chase a ghost.
-            const member = guild.members.cache.get(config.ownerId) as any
+            // Still there? Don't chase a ghost. (Fetch: selfbot caches can be thin.)
+            let member = guild.members.cache.get(config.ownerId) as any
+            if (!member) {
+              try { member = await guild.members.fetch(config.ownerId) } catch {}
+            }
             const stillThere = member?.voice?.channel?.id === channelId
             if (!stillThere) {
               console.log("[AUTOJOIN] Owner left before the 10s delay — not joining")
@@ -182,6 +208,7 @@ function registerVoiceStateUpdateHandler(): void {
         try { queue.connection?.destroy() } catch {}
         queue.connection = null
         queue.voiceChannelId = null
+        try { queue.player.removeAllListeners(AudioPlayerStatus.Idle) } catch {}
         try { queue.player.stop() } catch {}
         saveState()
       }

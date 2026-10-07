@@ -1,4 +1,4 @@
-import { joinVoiceChannel, createAudioPlayer } from "@discordjs/voice"
+import { joinVoiceChannel, createAudioPlayer, AudioPlayerStatus } from "@discordjs/voice"
 import { Message, Guild, VoiceChannel, Channel } from "selfbotsdk-discordjs"
 import { queues, saveState, createDefaultQueue, markIntentionalLeave } from "../voice/shelf"
 import { playTrack, playStation } from "../voice/jukebox"
@@ -69,6 +69,7 @@ async function handleLeave(msg: Message, guild: Guild | undefined, queue: Queue 
 
   await tellUser(msg, queue, pick(["leaving the voice channel~ bye for now", "slipping out~ call me when you need me"]))
   queue.songs = []
+  try { queue.player.removeAllListeners(AudioPlayerStatus.Idle) } catch {}
   queue.player.stop()
   if (guild) markIntentionalLeave(guild.id)
   queue.connection?.destroy()

@@ -25,6 +25,15 @@ function takeIntentionalLeave(guildId: string): boolean {
   return true
 }
 
+// A queue whose voice connection is missing or destroyed counts as dead —
+// routing and (re)join logic must treat it like no session at all, otherwise
+// commands get sent to a ghost connection and nothing is heard.
+function isConnectionLive(q: Queue | undefined): boolean {
+  if (!q || !q.connection) return false
+  const status = (q.connection as any).state?.status
+  return status !== "destroyed"
+}
+
 function saveState(stateLog: boolean = true): void {
   const state: Record<string, unknown> = {}
   for (const [guildId, queue] of queues) {
@@ -112,4 +121,4 @@ function createDefaultQueue(overrides: Partial<Queue> = {}): Queue {
   } as Queue
 }
 
-export { queues, saveState, loadState, createDefaultQueue, markIntentionalLeave, takeIntentionalLeave }
+export { queues, saveState, loadState, createDefaultQueue, markIntentionalLeave, takeIntentionalLeave, isConnectionLive }
