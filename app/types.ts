@@ -110,6 +110,7 @@ export interface Config {
   mp3ApiBase: string
   mp3ApiKey: string
   youtubeCookies: string
+  youtubeApiKey: string
 }
 
 export interface PlaylistVideoEntry {

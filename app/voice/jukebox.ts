@@ -1,23 +1,51 @@
 import { createAudioResource, AudioPlayerStatus, StreamType } from "@discordjs/voice"
 import { spawn } from "child_process"
 import { Readable } from "stream"
-import config from "../config"
-import { queues, saveState } from "./queue"
+import fs from "fs"
+import config from "../setup"
+import { queues, saveState } from "./shelf"
 import { Song, Processes } from "../types"
-import { sendToTextChannel } from "../utils/send"
-import { formatDuration } from "../utils/format"
-import { resolveMp3, downloadMp3, cleanupTempFile } from "../services/mp3api"
+import { tellChannel, pick } from "../tools/say"
+import { formatDuration } from "../tools/timefmt"
+import { fetchMp3, grabMp3, dropTemp } from "../web/fetchmp3"
 
 interface StreamWithProcesses extends Readable {
   processes: Processes
 }
 
 /**
- * Play a downloaded mp3 file through ffmpeg -> opus.
- * Replaces the old yt-dlp live pipe (YouTube blocks datacenter IPs,
- * so audio now comes from the MP3 downloader API as a temp file).
+ * Backup audio path: yt-dlp live stream piped through ffmpeg.
+ * Only used when the MP3 downloader API fails.
  */
-function streamFile(filePath: string, seekTime: number | null = null): StreamWithProcesses {
+function pipeYtdlp(url: string): StreamWithProcesses {
+  const ytdlpArgs: string[] = ["-f", "bestaudio", "-o", "-", "--js-runtimes", "node"]
+
+  if (fs.existsSync(config.cookiesFile)) {
+    ytdlpArgs.push("--cookies", config.cookiesFile)
+  }
+
+  ytdlpArgs.push(url)
+
+  const ytdlp = spawn(config.ytdlpExecutable, ytdlpArgs)
+  const ff = spawn(config.ffmpeg, ["-i", "pipe:0", "-f", "opus", "-ar", "48000", "-ac", "2", "pipe:1"])
+
+  ytdlp.stdout!.pipe(ff.stdin!)
+
+  ytdlp.stderr!.on("data", (data: Buffer) => { console.error("yt-dlp stderr:", data.toString()) })
+  ytdlp.on("error", (err: Error) => { console.error("yt-dlp error:", err) })
+  ff.stderr!.on("data", (data: Buffer) => { console.error("ffmpeg stderr:", data.toString()) })
+  ff.on("error", (err: Error) => { console.error("ffmpeg error:", err) })
+
+  const outStream = ff.stdout as unknown as StreamWithProcesses
+  outStream.processes = { ytdlp, ff }
+  return outStream
+}
+
+/**
+ * Play a downloaded mp3 file through ffmpeg -> opus.
+ * Primary audio path: the file comes from the MP3 downloader API.
+ */
+function pipeFile(filePath: string, seekTime: number | null = null): StreamWithProcesses {
   const ffArgs: string[] = []
 
   if (seekTime) {
@@ -48,7 +76,7 @@ function streamFile(filePath: string, seekTime: number | null = null): StreamWit
   return outStream
 }
 
-function handleMusicStreamingError(guild: any, song: Song, source: string, error: Error | null = null): void {
+function fixStreamError(guild: any, song: Song, source: string, error: Error | null = null): void {
   const queue = queues.get(guild.id)
   if (!queue) return
 
@@ -79,28 +107,28 @@ function handleMusicStreamingError(guild: any, song: Song, source: string, error
 
   if (queue.musicReconnectAttempts >= MAX_MUSIC_RECONNECT_ATTEMPTS) {
     const errorMsg = isBrokenPipe
-      ? `❌ Musik terputus (broken pipe) setelah ${MAX_MUSIC_RECONNECT_ATTEMPTS} percobaan reconnect. Melanjutkan ke lagu berikutnya...`
-      : `❌ Musik gagal diputar setelah ${MAX_MUSIC_RECONNECT_ATTEMPTS} percobaan reconnect. Melanjutkan ke lagu berikutnya...`
+      ? `lost that one after ${MAX_MUSIC_RECONNECT_ATTEMPTS} tries~ moving to the next song`
+      : `couldn't get that song to play~ skipping ahead`
 
-    sendToTextChannel(queue, errorMsg)
+    tellChannel(queue, errorMsg)
     queue.musicReconnectAttempts = 0
     queue.isMusicReconnecting = false
     queue.musicReconnectMessage = null
     queue.songs.shift()
     if (queue.songs.length > 0) {
-      playSong(guild, queue.songs[0])
+      playTrack(guild, queue.songs[0])
     }
     return
   }
 
   const baseDelay = isBrokenPipe ? 1500 : 3000
   const delay = Math.min(baseDelay * Math.pow(2, queue.musicReconnectAttempts - 1), 10000)
-  const reconnectText = `❌ Musik terputus (${source}), mencoba reconnect (${queue.musicReconnectAttempts}/${MAX_MUSIC_RECONNECT_ATTEMPTS}) dalam ${delay / 1000} detik...`
+  const reconnectText = `oops, the music tripped~ trying again (${queue.musicReconnectAttempts}/${MAX_MUSIC_RECONNECT_ATTEMPTS})`
 
   if (queue.musicReconnectMessage) {
     queue.musicReconnectMessage.edit(reconnectText).catch(console.error)
   } else {
-    sendToTextChannel(queue, reconnectText).then((msg) => {
+    tellChannel(queue, reconnectText).then((msg) => {
       queue.musicReconnectMessage = msg
     }).catch(console.error)
   }
@@ -111,7 +139,7 @@ function handleMusicStreamingError(guild: any, song: Song, source: string, error
       if (currentQueue.songs[0] && currentQueue.songs[0].url === song.url) {
         console.log(`[music] Attempting to reconnect to: ${song.title}`)
         queue.isMusicReconnecting = false
-        playSong(guild, song)
+        playTrack(guild, song)
       } else {
         queue.isMusicReconnecting = false
         queue.musicReconnectAttempts = 0
@@ -126,15 +154,15 @@ function handleMusicStreamingError(guild: any, song: Song, source: string, error
   }, delay)
 }
 
-async function playSong(guild: any, song: Song | undefined): Promise<void> {
+async function playTrack(guild: any, song: Song | undefined): Promise<void> {
   const queue = queues.get(guild.id)
   if (!queue) return
 
-  const { removeReactionUI } = await import("../ui/reactions")
+  const { removeReactionUI } = await import("../chat/panel")
 
   if (!song) {
     queue.playing = false
-    cleanupTempFile(queue)
+    dropTemp(queue)
 
     if (queue.currentProcesses) {
       queue.currentProcesses.ytdlp?.kill()
@@ -150,11 +178,11 @@ async function playSong(guild: any, song: Song | undefined): Promise<void> {
     }
     if (queue.radioUrl && queue.radioName) {
       queue.radioStopped = false
-      sendToTextChannel(queue, "✅ Musik selesai, kembali ke radio...")
-      playRadio(guild, queue.radioUrl, queue.radioName)
+      tellChannel(queue, "songs are done~ back to the radio for you")
+      playStation(guild, queue.radioUrl, queue.radioName)
       return
     }
-    sendToTextChannel(queue, "✅ Selesai memutar semua lagu")
+    tellChannel(queue, "that's everything~ the queue is all done")
     return
   }
 
@@ -176,7 +204,7 @@ async function playSong(guild: any, song: Song | undefined): Promise<void> {
     queue.currentProcesses.ytdlp?.kill()
     queue.currentProcesses.ff.kill()
   }
-  cleanupTempFile(queue)
+  dropTemp(queue)
 
   let seekTime: number | null = null
   if (song.resumeFrom) {
@@ -187,28 +215,26 @@ async function playSong(guild: any, song: Song | undefined): Promise<void> {
 
   // Resolve the YouTube URL to a direct mp3 via the downloader API,
   // then download it to temp storage before playing.
-  await sendToTextChannel(queue, `Fetching audio for **${song.title}**...`)
-  let tmpPath: string
+  // Primary: MP3 downloader API -> temp file. Backup: yt-dlp live stream.
+  await tellChannel(queue, pick([`fetching **${song.title}** for you~ one sec`, `on it~ grabbing **${song.title}**`, `let me get **${song.title}** ready~`]))
+  let audio: StreamWithProcesses
   try {
-    const mp3 = await resolveMp3(song.url)
+    const mp3 = await fetchMp3(song.url)
     if (mp3.title && mp3.title !== "Unknown title") song.title = mp3.title
     if (mp3.duration > 0) {
       song.duration = mp3.duration
       song.durationFormatted = formatDuration(mp3.duration)
     }
-    tmpPath = await downloadMp3(mp3.link, mp3.proxyUrl)
+    const tmpPath = await grabMp3(mp3.link, mp3.proxyUrl)
+    queue.currentTempFile = tmpPath
+    console.log(`[music] audio file ready, spawning ffmpeg for "${song.title}"`)
+    audio = pipeFile(tmpPath, seekTime)
   } catch (err) {
-    const reason = (err as Error).message
-    console.error("[music] mp3 resolve/download failed:", reason)
-    await sendToTextChannel(queue, `Could not fetch audio for **${song.title}** (${reason}). Skipping to the next song...`)
-    queue.songs.shift()
-    queue.playing = false
-    playSong(guild, queue.songs[0])
-    return
+    console.error("[music] mp3 API failed, falling back to yt-dlp stream:", (err as Error).message)
+    await tellChannel(queue, `first try flopped~ let me try another way for **${song.title}**`)
+    queue.currentTempFile = null
+    audio = pipeYtdlp(song.url)
   }
-
-  queue.currentTempFile = tmpPath
-  console.log(`[music] audio file ready, spawning ffmpeg for "${song.title}"`)
 
   const startedAt = seekTime
     ? new Date(Date.now() - seekTime * 1000).toISOString()
@@ -220,8 +246,6 @@ async function playSong(guild: any, song: Song | undefined): Promise<void> {
     isRadio: false
   }
 
-  const audio = streamFile(tmpPath, seekTime)
-
   const resource = createAudioResource(audio, { inlineVolume: true })
   resource.volume?.setVolume(queue.volume ?? 1.0)
 
@@ -231,7 +255,25 @@ async function playSong(guild: any, song: Song | undefined): Promise<void> {
     if (queue.currentProcesses !== audio.processes) return
     console.error("ffmpeg error:", err)
     if (!queue.isMusicReconnecting && !queue.radioStopped) {
-      handleMusicStreamingError(guild, song, "ffmpeg", err)
+      fixStreamError(guild, song, "ffmpeg", err)
+    }
+  })
+
+  audio.processes.ytdlp?.on("error", (err: Error) => {
+    if (queue.currentProcesses !== audio.processes) return
+    console.error("yt-dlp fallback error:", err)
+    if (!queue.isMusicReconnecting && !queue.radioStopped) {
+      fixStreamError(guild, song, "yt-dlp", err)
+    }
+  })
+
+  audio.processes.ytdlp?.on("close", (code: number | null) => {
+    if (queue.currentProcesses !== audio.processes) return
+    if (code !== 0 && code !== null && !queue.isMusicReconnecting && !queue.radioStopped) {
+      console.error("yt-dlp fallback exited with code:", code)
+      const error = new Error(`yt-dlp exited with code ${code}`)
+      ;(error as NodeJS.ErrnoException).code = String(code)
+      fixStreamError(guild, song, "yt-dlp", error)
     }
   })
 
@@ -241,7 +283,7 @@ async function playSong(guild: any, song: Song | undefined): Promise<void> {
       console.error("ffmpeg exited with code:", code)
       const error = new Error(`ffmpeg exited with code ${code}`)
       ;(error as NodeJS.ErrnoException).code = String(code)
-      handleMusicStreamingError(guild, song, "ffmpeg", error)
+      fixStreamError(guild, song, "ffmpeg", error)
     }
   })
 
@@ -254,13 +296,13 @@ async function playSong(guild: any, song: Song | undefined): Promise<void> {
     if (queue.currentProcesses !== audio.processes) return
     console.error("Audio player error:", err)
     if (!queue.isMusicReconnecting && !queue.radioStopped) {
-      handleMusicStreamingError(guild, song, "player", err)
+      fixStreamError(guild, song, "player", err)
     }
   })
 
   queue.connection?.on("error", (err: Error) => {
     console.error("Voice connection error:", err)
-    sendToTextChannel(queue, "❌ Error connecting to voice channel, stopping music...")
+    tellChannel(queue, "lost the voice connection~ stopping the music")
     queue.player.stop()
   })
 
@@ -269,7 +311,7 @@ async function playSong(guild: any, song: Song | undefined): Promise<void> {
     : song.duration
       ? ` [${Math.floor(song.duration / 60)}:${(song.duration % 60).toString().padStart(2, "0")}]`
       : ""
-  await sendToTextChannel(queue, `🎵 Now playing **${song.title}**${durStr} 🎵`)
+  await tellChannel(queue, pick([`now spinning **${song.title}**${durStr}~ this one's for you`, `**${song.title}**${durStr}~ sing along with me`, `ooh I love this one~ **${song.title}**${durStr}`]))
   saveState()
 
   if (queue._saveInterval) clearInterval(queue._saveInterval)
@@ -289,7 +331,7 @@ async function playSong(guild: any, song: Song | undefined): Promise<void> {
       queue.currentProcesses.ytdlp?.kill()
       queue.currentProcesses.ff.kill()
     }
-    cleanupTempFile(queue)
+    dropTemp(queue)
 
     if (queue.isMusicReconnecting) {
       queue.playing = false
@@ -308,14 +350,14 @@ async function playSong(guild: any, song: Song | undefined): Promise<void> {
       if (shiftedSong) queue.songs.push(shiftedSong)
     }
 
-    playSong(guild, queue.songs[0])
+    playTrack(guild, queue.songs[0])
   })
 }
 
-async function playRadio(guild: any, radioUrl: string, radioName: string): Promise<void> {
+async function playStation(guild: any, radioUrl: string, radioName: string): Promise<void> {
   const queue = queues.get(guild.id)
-  const { startRadioMetadataDetection } = await import("../services/radioMetadata")
-  const { detectStreamCodec, spawnRadioFfmpeg } = await import("../services/radio")
+  const { startRadioMetadataDetection } = await import("../web/nowonair")
+  const { detectStreamCodec, spawnRadioFfmpeg } = await import("../web/airwaves")
 
   if (!queue) {
     console.error("Queue not found for radio")
@@ -377,26 +419,26 @@ async function playRadio(guild: any, radioUrl: string, radioName: string): Promi
       queue.radioReconnectAttempts!++
 
       if (queue.radioReconnectAttempts! >= MAX_RECONNECT_ATTEMPTS) {
-        const errorMsg = `❌ Radio stream terputus (${reason}) setelah ${MAX_RECONNECT_ATTEMPTS} percobaan reconnect. Mohon coba lagi nanti.`
-        sendToTextChannel(queue, errorMsg)
+        const errorMsg = `the radio slipped away~ try again in a bit?`
+        tellChannel(queue, errorMsg)
         queue.radioStopped = true
         queue.isReconnecting = false
         return false
       }
 
       const delay = 3000
-      const reconnectMsg = `📻 Now playing radio: **${radioName}** (Reconnecting ${queue.radioReconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}...)`
+      const reconnectMsg = `tuning back into **${radioName}**~ (take ${queue.radioReconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`
 
       if (queue.radioMessage) {
         queue.radioMessage.edit(reconnectMsg).catch(console.error)
       } else {
-        sendToTextChannel(queue, reconnectMsg)
+        tellChannel(queue, reconnectMsg)
       }
 
       setTimeout(() => {
         const currentQueue = queues.get(guild.id)
         if (currentQueue && !currentQueue.radioStopped) {
-          playRadio(guild, radioUrl, radioName)
+          playStation(guild, radioUrl, radioName)
         } else {
           console.log(`[radio] Reconnect cancelled - Queue: ${!!currentQueue}, Stopped: ${currentQueue?.radioStopped}`)
           queue.isReconnecting = false
@@ -450,7 +492,7 @@ async function playRadio(guild: any, radioUrl: string, radioName: string): Promi
 
     queue.connection?.on("error", (err: Error) => {
       console.error("Voice connection error:", err)
-      sendToTextChannel(queue, "❌ Error connecting to voice channel, stopping radio...")
+      tellChannel(queue, "lost the voice connection~ stopping the radio")
       if (queue.radioFfmpeg) queue.radioFfmpeg.kill()
       if (queue._saveInterval) {
         clearInterval(queue._saveInterval)
@@ -464,10 +506,10 @@ async function playRadio(guild: any, radioUrl: string, radioName: string): Promi
     })
 
     if (queue.radioMessage && queue.isReconnecting) {
-      queue.radioMessage.edit(`📻 Now playing radio: **${radioName}**`).catch(console.error)
+      queue.radioMessage.edit(`tuning into **${radioName}** for you~`).catch(console.error)
     } else {
       try {
-        const radioMsg = await sendToTextChannel(queue, `📻 Now playing radio: **${radioName}**`)
+        const radioMsg = await tellChannel(queue, `tuning into **${radioName}** for you~`)
         queue.radioMessage = radioMsg || undefined
       } catch (sendErr) {
         console.error(`[radio] Failed to send radio message: ${(sendErr as Error).message}`)
@@ -476,7 +518,7 @@ async function playRadio(guild: any, radioUrl: string, radioName: string): Promi
     }
 
     if (queue.reconnectMessage) {
-      queue.reconnectMessage.edit("✅ Berhasil reconnect radio").catch(console.error)
+      queue.reconnectMessage.edit("radio's back~").catch(console.error)
       queue.reconnectMessage = null
     }
 
@@ -489,7 +531,7 @@ async function playRadio(guild: any, radioUrl: string, radioName: string): Promi
 
     saveState()
   } catch (err) {
-    console.error(`[radio] Unexpected error in playRadio: ${(err as Error).message}`)
+    console.error(`[radio] Unexpected error in playStation: ${(err as Error).message}`)
     const errMsg = (err as Error).message
     if (errMsg && errMsg.includes("Missing Access")) {
       console.error("[radio] Stopping radio due to Missing Access (bot likely removed from channel/server)")
@@ -507,11 +549,11 @@ async function playRadio(guild: any, radioUrl: string, radioName: string): Promi
       setTimeout(() => {
         const currentQueue = queues.get(guild.id)
         if (currentQueue && !currentQueue.radioStopped) {
-          playRadio(guild, radioUrl, radioName)
+          playStation(guild, radioUrl, radioName)
         }
       }, delay)
     }
   }
 }
 
-export { streamFile, playSong, playRadio, handleMusicStreamingError }
+export { pipeFile, playTrack, playStation, fixStreamError }

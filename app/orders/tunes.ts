@@ -2,14 +2,14 @@ import { joinVoiceChannel, createAudioPlayer, AudioPlayerStatus } from "@discord
 import { spawn } from "child_process"
 import fs from "fs"
 import { Message, Guild, VoiceChannel, MessageAttachment } from "selfbotsdk-discordjs"
-import { queues, saveState, createDefaultQueue } from "../core/queue"
-import { playSong } from "../core/player"
-import { searchSong, resolveUrlSong } from "../services/youtube"
-import { formatDuration } from "../utils/format"
-import config from "../config"
+import { queues, saveState, createDefaultQueue } from "../voice/shelf"
+import { playTrack } from "../voice/jukebox"
+import { findTrack, linkTrack, v3Playlist } from "../web/tube"
+import { formatDuration } from "../tools/timefmt"
+import config from "../setup"
 import { Queue, PlaylistVideoEntry, Song } from "../types"
-import { sendMsg, stripEmojis } from "../utils/send"
-import { cleanupTempFile } from "../services/mp3api"
+import { tellUser, stripEmojis, pick } from "../tools/say"
+import { dropTemp } from "../web/fetchmp3"
 
 interface PlaylistJSON {
   entries: Array<{
@@ -19,7 +19,7 @@ interface PlaylistJSON {
   }>
 }
 
-async function getPlaylistVideos(url: string): Promise<PlaylistVideoEntry[]> {
+async function playlistViaYtdlp(url: string): Promise<PlaylistVideoEntry[]> {
   return new Promise((resolve, reject) => {
     const ytdlpArgs: string[] = ["--dump-single-json", "--flat-playlist", "--js-runtimes", "node"]
 
@@ -65,11 +65,33 @@ async function getPlaylistVideos(url: string): Promise<PlaylistVideoEntry[]> {
   })
 }
 
+/**
+ * Resolve a playlist: YouTube Data v3 first (clean, paginated),
+ * yt-dlp flat-playlist as backup.
+ */
+async function resolvePlaylist(url: string): Promise<Song[]> {
+  if (config.youtubeApiKey) {
+    try {
+      console.log("[tube] v3 playlist:", url)
+      const tracks = await v3Playlist(url)
+      return tracks.map((t) => ({
+        title: t.title,
+        url: t.url,
+        duration: t.duration,
+        durationFormatted: t.durationFormatted
+      }))
+    } catch (err) {
+      console.log("[tube] v3 playlist failed, trying yt-dlp:", (err as Error).message)
+    }
+  }
+  return playlistViaYtdlp(url)
+}
+
 async function handlePlay(msg: Message, args: string[], guild: Guild, voice: VoiceChannel | null, queue: Queue | undefined): Promise<void> {
   const query = args.join(" ")
 
   if (!query) {
-    await sendMsg(msg, queue, "Usage: ?play <song name, URL, or multiple URLs separated by space>")
+    await tellUser(msg, queue, "tell me what to play first~ like @Mikka play <song name or link>")
     return
   }
 
@@ -79,16 +101,16 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
   const urls = query.split(" ").filter(part => part.startsWith("http"))
 
   if (urls.length > 1) {
-    await sendMsg(msg, queue, `📥 Processing ${urls.length} URLs...`)
+    await tellUser(msg, queue, `ooh, ${urls.length} links at once? greedy~ let me grab them all`)
 
     for (const url of urls) {
       try {
         if (url.includes("list=")) {
-          await sendMsg(msg, queue, `📥 Fetching playlist from: ${url}`)
-          const playlistSongs = await getPlaylistVideos(url)
+          await tellUser(msg, queue, "ooh, a playlist~ let me unwrap it for you")
+          const playlistSongs = await resolvePlaylist(url)
           songs.push(...playlistSongs)
         } else {
-          const songData = await searchSong(url)
+          const songData = await findTrack(url)
           songs.push({
             title: songData.title,
             url: songData.url,
@@ -98,11 +120,11 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
         }
       } catch (error) {
         console.error(`Error processing URL ${url}:`, error)
-        await sendMsg(msg, queue, `❌ Failed to process URL: ${url}`)
+        await tellUser(msg, queue, "hmm, that link misbehaved~ skipping it")
       }
     }
 
-    await sendMsg(msg, queue, `📥 Added **${songs.length}** songs from multiple URLs`)
+    await tellUser(msg, queue, `added **${songs.length}** songs to our little queue~`)
 
   } else if (query.startsWith("http")) {
     const parts = query.split(" ")
@@ -110,53 +132,53 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
     limit = parts[1] ? parseInt(parts[1]) : null
 
     if (url.includes("list=")) {
-      await sendMsg(msg, queue, "📥 Fetching playlist...")
+      await tellUser(msg, queue, "unwrapping your playlist~ one sec")
       try {
-        songs = await getPlaylistVideos(url)
+        songs = await resolvePlaylist(url)
       } catch (error) {
         console.error("Error fetching playlist:", error)
-        await sendMsg(msg, queue, `❌ Failed to fetch playlist: ${url}`)
+        await tellUser(msg, queue, "that playlist wouldn't open for me~ try another one?")
         saveState()
         return
       }
 
       if (limit && limit > 0) {
         songs = songs.slice(0, limit)
-        await sendMsg(msg, queue, `📥 Added **${songs.length}** songs from playlist (limited to ${limit})`)
+        await tellUser(msg, queue, `added **${songs.length}** songs~ kept it to ${limit} like you asked`)
       } else {
-        await sendMsg(msg, queue, `📥 Added **${songs.length}** songs from playlist`)
+        await tellUser(msg, queue, `added **${songs.length}** songs from the playlist~ enjoy`)
       }
     } else {
       try {
         // Direct links bypass yt-dlp entirely (no YouTube bot wall)
-        const songData = await resolveUrlSong(url)
+        const songData = await linkTrack(url)
         songs.push({
           title: songData.title,
           url: songData.url,
           duration: songData.duration,
           durationFormatted: songData.durationFormatted
         })
-        await sendMsg(msg, queue, `📥 Added **${songs[0].title}**`)
+        await tellUser(msg, queue, pick([`added **${songs[0].title}** just for you~`, `ooh, good taste~ **${songs[0].title}** is in the queue`, `**${songs[0].title}**~ coming right up`]))
       } catch (error) {
         console.error("Error fetching single URL:", error)
-        await sendMsg(msg, queue, `❌ Failed to fetch video from URL: ${url}`)
+        await tellUser(msg, queue, "couldn't open that link~ is it valid?")
         saveState()
         return
       }
     }
   } else {
     try {
-      const songData = await searchSong(query)
+      const songData = await findTrack(query)
       songs.push({
         title: songData.title,
         url: songData.url,
         duration: songData.duration,
         durationFormatted: songData.durationFormatted
       })
-      await sendMsg(msg, queue, `📥 Added **${songs[0].title}**`)
+      await tellUser(msg, queue, pick([`added **${songs[0].title}** just for you~`, `ooh, good taste~ **${songs[0].title}** is in the queue`, `**${songs[0].title}**~ coming right up`]))
     } catch (error) {
       console.error("Error searching for song:", error)
-      await sendMsg(msg, queue, `❌ No results found for: ${query}`)
+      await tellUser(msg, queue, `couldn't find anything for "${query}"~ try another name?`)
       saveState()
       return
     }
@@ -169,7 +191,7 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
 
   if (!queue) {
     if (!voice) {
-      await sendMsg(msg, queue, "Join VC dulu")
+      await tellUser(msg, queue, "join a voice channel first, silly~ I can't sing to an empty room")
       return
     }
     const connection = joinVoiceChannel({
@@ -218,7 +240,7 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
   console.log(`💾 State saved. Queue songs count: ${queue.songs.length}`)
 
   if (queue.player.state.status === AudioPlayerStatus.Idle) {
-    playSong(guild, queue.songs[0])
+    playTrack(guild, queue.songs[0])
   }
 }
 
@@ -228,28 +250,28 @@ async function handleSkip(msg: Message, queue: Queue | undefined): Promise<void>
     if (queue.currentProcesses) {
       queue.currentProcesses.ytdlp?.kill()
       queue.currentProcesses.ff.kill()
-      cleanupTempFile(queue)
+      dropTemp(queue)
     }
     queue.player.stop()
     saveState()
-    await sendMsg(msg, queue, "⏭️ Skipped!")
+    await tellUser(msg, queue, pick(["skipped~ next one!", "okay~ next song", "poof~ gone, playing the next"]))
   }
 }
 
 async function handleLoop(msg: Message, queue: Queue | undefined): Promise<void> {
   if (!queue) {
-    await sendMsg(msg, queue, "Tidak ada queue yang aktif")
+    await tellUser(msg, queue, "nothing's playing right now~")
     return
   }
   queue.loopMode = ((queue.loopMode || 0) + 1) % 3
-  const modes = ["Off ❌", "Single 🔂", "All 🔁"]
-  await sendMsg(msg, queue, `🔂 Loop mode set to: **${modes[queue.loopMode]}**`)
+  const modes = ["Off", "Single", "All"]
+  await tellUser(msg, queue, `loop is now **${modes[queue.loopMode]}**~`)
   saveState()
 }
 
 async function handleShuffle(msg: Message, queue: Queue | undefined): Promise<void> {
   if (!queue || queue.songs.length < 3) {
-    await sendMsg(msg, queue, "Butuh minimal 2 lagu di antrean untuk shuffle")
+    await tellUser(msg, queue, "need at least 2 songs to shuffle, cutie~")
     return
   }
 
@@ -259,17 +281,17 @@ async function handleShuffle(msg: Message, queue: Queue | undefined): Promise<vo
     [queue.songs[i], queue.songs[j]] = [queue.songs[j], queue.songs[i]]
   }
   if (playing) queue.songs.unshift(playing)
-  await sendMsg(msg, queue, "🔀 Queue berhasil di-shuffle!")
+  await tellUser(msg, queue, "shuffled~ let's see what fate picks")
   saveState()
 }
 
 async function handleQueue(msg: Message, queue: Queue | undefined): Promise<void> {
   if (!queue || queue.songs.length === 0) {
-    await sendMsg(msg, queue, "Queue kosong")
+    await tellUser(msg, queue, "the queue's empty~ add something with @Mikka play")
     return
   }
 
-  const modes = ["Off ❌", "Single 🔂", "All 🔁"]
+  const modes = ["Off", "Single", "All"]
   const loopStatus = modes[queue.loopMode || 0]
   const currentSong = queue.currentSong
 
@@ -298,7 +320,7 @@ async function handleQueue(msg: Message, queue: Queue | undefined): Promise<void
   const attachment = new MessageAttachment(buffer, "queue.txt")
 
   // Kirim preview singkat + file .txt
-  const rawPreview = `**Queue** (${queue.songs.length} songs${currentSong ? ` | Now playing: **${currentSong.title}**` : ""} | Loop: ${loopStatus}) - File: \`queue.txt\``
+  const rawPreview = `here's our little lineup~ (${queue.songs.length} songs${currentSong ? ` | now playing: **${currentSong.title}**` : ""} | loop: ${loopStatus}) - details in \`queue.txt\``
   const preview = stripEmojis(rawPreview)
 
   if (queue?.silent) {
@@ -314,14 +336,14 @@ async function handleQueue(msg: Message, queue: Queue | undefined): Promise<void
 
 async function handleStop(msg: Message, queue: Queue | undefined): Promise<void> {
   if (!queue) {
-    await sendMsg(msg, queue, "❌ Tidak ada musik yang sedang diputar")
+    await tellUser(msg, queue, "nothing's playing at the moment~")
     return
   }
 
   if (queue.currentProcesses) {
     queue.currentProcesses.ytdlp?.kill()
     queue.currentProcesses.ff.kill()
-    cleanupTempFile(queue)
+    dropTemp(queue)
   }
   if (queue.radioFfmpeg) queue.radioFfmpeg.kill()
   if (queue.metadataDetector) {
@@ -341,23 +363,23 @@ async function handleStop(msg: Message, queue: Queue | undefined): Promise<void>
   queue.songs = []
   queue.player.stop()
   saveState()
-  await sendMsg(msg, queue, "⏹️ Berhenti memutar musik/radio")
+  await tellUser(msg, queue, "stopped~ the stage is yours again")
 }
 
 async function handleVolume(msg: Message, args: string[], queue: Queue | undefined): Promise<void> {
   if (!queue) {
-    await sendMsg(msg, queue, "Tidak ada musik yang sedang diputar")
+    await tellUser(msg, queue, "nothing's playing though~")
     return
   }
   const volArg = args[0]
   if (!volArg) {
-    await sendMsg(msg, queue, `Volume saat ini: **${Math.round((queue.volume ?? 1.0) * 100)}%**`)
+    await tellUser(msg, queue, `volume's at **${Math.round((queue.volume ?? 1.0) * 100)}%**~`)
     return
   }
 
   let vol = parseFloat(volArg)
   if (isNaN(vol)) {
-    await sendMsg(msg, queue, "Masukkan angka antara 0-100 atau 0.0-1.0")
+    await tellUser(msg, queue, "give me a number between 0 and 100~")
     return
   }
   if (vol > 1) vol = vol / 100
@@ -371,7 +393,7 @@ async function handleVolume(msg: Message, args: string[], queue: Queue | undefin
   }
 
   saveState()
-  await sendMsg(msg, queue, `🔊 Volume diatur ke **${Math.round(vol * 100)}%**`)
+  await tellUser(msg, queue, `volume set to **${Math.round(vol * 100)}%**~`)
 }
 
 export {
@@ -382,5 +404,5 @@ export {
   handleQueue,
   handleStop,
   handleVolume,
-  getPlaylistVideos
+  playlistViaYtdlp
 }

@@ -1,10 +1,10 @@
 import { Message, Guild, VoiceChannel } from "selfbotsdk-discordjs"
-import config from "../config"
-import { queues } from "../core/queue"
-import { handlePlay, handleSkip, handleLoop, handleShuffle, handleQueue, handleStop, handleVolume } from "./music"
-import { handleRadio, handleRadioStats } from "./radio"
-import { handleTest, handleHelp, handleLeave, handleClearChat, handleClearReactions, handleSync, handleJoin, handleState, handlePanel, handleSilent } from "./utility"
-import { replyHuman, sendHuman } from "../utils/send"
+import config from "../setup"
+import { queues } from "../voice/shelf"
+import { handlePlay, handleSkip, handleLoop, handleShuffle, handleQueue, handleStop, handleVolume } from "./tunes"
+import { handleRadio, handleRadioStats } from "./tuner"
+import { handleTest, handleHelp, handleLeave, handleClearChat, handleClearReactions, handleSync, handleJoin, handleState, handlePanel, handleSilent } from "./handy"
+import { replySoft, saySoft } from "../tools/say"
 import { Queue } from "../types"
 
 async function handleMessageCreate(msg: Message): Promise<void> {
@@ -52,13 +52,13 @@ async function handleMessageCreate(msg: Message): Promise<void> {
     }
 
     if (!voice) {
-      await replyHuman(msg, "You need to be in a voice channel on one of the servers to use this command in DM")
+      await replySoft(msg, "that needs a voice channel, cutie~ hop into one first")
       return
     }
   } else {
     voice = msg.member.voice.channel as VoiceChannel | null
     if (!voice && cmd !== "help" && cmd !== "state" && cmd !== "test") {
-      await replyHuman(msg, "Join a voice channel first")
+      await replySoft(msg, "join a voice channel first~ I'll follow you in")
       return
     }
     if (guild) queue = queues.get(guild.id)
@@ -70,12 +70,12 @@ async function handleMessageCreate(msg: Message): Promise<void> {
       return
     }
     case "play": {
-      if (!guild) { await replyHuman(msg, "Guild not found"); return }
+      if (!guild) { await replySoft(msg, "hmm, can't find that server~"); return }
       try {
         await handlePlay(msg, args, guild, voice, queue)
       } catch (error) {
         console.error("Error in handlePlay:", error)
-        try { await sendHuman(msg.channel as any, "Something went wrong while processing the play command").catch(() => {}) } catch {}
+        try { await saySoft(msg.channel as any, "oopsie, something tripped~ try again?").catch(() => {}) } catch {}
       }
       return
     }
@@ -105,7 +105,7 @@ async function handleMessageCreate(msg: Message): Promise<void> {
       return
     }
     case "radio": {
-      if (!guild) { await replyHuman(msg, "Guild not found"); return }
+      if (!guild) { await replySoft(msg, "hmm, can't find that server~"); return }
       await handleRadio(msg, args, guild, voice, queue)
       return
     }
@@ -126,12 +126,12 @@ async function handleMessageCreate(msg: Message): Promise<void> {
       return
     }
     case "sync": {
-      if (!guild) { await replyHuman(msg, "Guild not found"); return }
+      if (!guild) { await replySoft(msg, "hmm, can't find that server~"); return }
       await handleSync(msg, args, guild, voice, queue)
       return
     }
     case "join": {
-      if (!guild) { await replyHuman(msg, "Guild not found"); return }
+      if (!guild) { await replySoft(msg, "hmm, can't find that server~"); return }
       await handleJoin(msg, args, guild, voice, queue)
       return
     }

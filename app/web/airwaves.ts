@@ -1,7 +1,7 @@
 import { spawn } from "child_process"
 import https from "https"
-import config from "../config"
-import { isUrl } from "../utils/format"
+import config from "../setup"
+import { isUrl } from "../tools/timefmt"
 import { RadioMetadataResult, FFmpegWithExtensions, StreamStats } from "../types"
 
 async function resolveRadioMetadata(query: string): Promise<RadioMetadataResult> {

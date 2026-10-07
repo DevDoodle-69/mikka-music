@@ -1,7 +1,7 @@
 import { Message, TextChannel, MessageReaction, ReactionCollector, User } from "selfbotsdk-discordjs"
 import { Queue } from "../types"
-import { sendHuman } from "../utils/send"
-import { cleanupTempFile } from "../services/mp3api"
+import { saySoft, pick } from "../tools/say"
+import { dropTemp } from "../web/fetchmp3"
 
 async function removeAllReactionsFromChannel(channel: TextChannel): Promise<void> {
   try {
@@ -99,7 +99,7 @@ async function createReactionUI(message: Message, queue: Queue): Promise<Reactio
         if (queue.currentProcesses) {
           queue.currentProcesses.ytdlp?.kill()
           queue.currentProcesses.ff.kill()
-          cleanupTempFile(queue)
+          dropTemp(queue)
         }
         queue.player.stop()
         break
@@ -124,7 +124,7 @@ async function createReactionUI(message: Message, queue: Queue): Promise<Reactio
         if (queue.currentProcesses) {
           queue.currentProcesses.ytdlp?.kill()
           queue.currentProcesses.ff.kill()
-          cleanupTempFile(queue)
+          dropTemp(queue)
         }
         if (queue.radioFfmpeg) queue.radioFfmpeg.kill()
         queue.songs = []
@@ -142,14 +142,14 @@ async function createReactionUI(message: Message, queue: Queue): Promise<Reactio
   return collector
 }
 
-let playSongRef: ((guild: any, song: any) => Promise<void>) | null = null
+let playTrackRef: ((guild: any, song: any) => Promise<void>) | null = null
 let playRadioRef: ((guild: any, radioUrl: string, radioName: string) => Promise<void>) | null = null
 
-function setPlaySongFunction(fn: (guild: any, song: any) => Promise<void>): void {
-  playSongRef = fn
+function setPlayTrackFunction(fn: (guild: any, song: any) => Promise<void>): void {
+  playTrackRef = fn
 }
 
-function setPlayRadioFunction(fn: (guild: any, radioUrl: string, radioName: string) => Promise<void>): void {
+function setPlayStationFunction(fn: (guild: any, radioUrl: string, radioName: string) => Promise<void>): void {
   playRadioRef = fn
 }
 
@@ -165,39 +165,30 @@ async function createCommandPanel(message: Message, queue: Queue): Promise<React
     queue.panelCollector = null
   }
 
-  const panelContent = `**Music Control Panel**
+  const panelContent = `**my little control panel~**
 
-**Controls (tap a reaction below):**
-[prev] - Previous song (if in queue)
-[play/pause] - Play/Pause
-[next] - Skip current song
-[vol-] - Volume Down
-[vol+] - Volume Up
-[stop] - Stop & Clear Queue
-[radio] - Back to Radio
-[music] - Music Mode
-[clear] - Clear Chat
-[info] - Show Queue Info
+**tap a reaction below, cutie:**
+[prev] - previous song
+[play/pause] - shh / sing
+[next] - skip it
+[vol-] - softer
+[vol+] - louder
+[stop] - hush, clear everything
+[radio] - back to radio
+[music] - music mode
+[clear] - tidy the chat
+[info] - what's playing
 
-**Available Commands:**
-**@bot play** <song name> - Search and play a song
-**@bot play** <single URL> - Play a single YouTube video
-**@bot play** <playlist URL> [limit] - Play a YouTube playlist (optional limit)
-**@bot skip** - Skip the current song
-**@bot loop** - Toggle loop mode (Off/Single/All)
-**@bot shuffle** - Shuffle the current queue
-**@bot queue** - Show current queue and loop mode
-**@bot stop** - Stop playing and clear queue
-**@bot volume** [0-100] - Set or check playback volume
-**@bot radio** <station name or URL> - Play a radio station
-**@bot leave** - Leave voice channel and clear queue
-**@bot state** - Show current bot state
-**@bot panel** - Show control panel with reaction UI
-**@bot help** - Show this help message
+**or just mention me:**
+**@Mikka play** <song name> - I'll find it for you
+**@Mikka play** <link> - straight from the link
+**@Mikka play** <playlist link> [limit] - the whole bunch
+**@Mikka skip / loop / shuffle / queue / stop**
+**@Mikka volume** [0-100]
+**@Mikka radio** <name> - tune in somewhere
+**@Mikka leave** - I'll slip away`
 
-Replace @bot with a mention of the bot, or use the ? prefix instead.`
-
-  const panelMsg = await sendHuman(message.channel as any, panelContent)
+  const panelMsg = await saySoft(message.channel as any, panelContent)
 
   try {
     for (const emoji of controls) {
@@ -221,22 +212,22 @@ Replace @bot with a mention of the bot, or use the ? prefix instead.`
           if (queue.currentProcesses) {
             queue.currentProcesses.ytdlp?.kill()
             queue.currentProcesses.ff.kill()
-            cleanupTempFile(queue)
+            dropTemp(queue)
           }
           queue.player.stop()
-          sendHuman(message.channel as any, "Playing previous song")
+          saySoft(message.channel as any, "back to the last one~")
         } else {
-          sendHuman(message.channel as any, "No previous song in queue")
+          saySoft(message.channel as any, "no earlier song, cutie~")
         }
         break
 
       case "⏯️":
         if (queue.player.state.status === "paused") {
           queue.player.unpause()
-          sendHuman(message.channel as any, "Resumed")
+          saySoft(message.channel as any, "and~ we're back")
         } else {
           queue.player.pause()
-          sendHuman(message.channel as any, "Paused")
+          saySoft(message.channel as any, "paused~ take your time")
         }
         break
 
@@ -245,10 +236,10 @@ Replace @bot with a mention of the bot, or use the ? prefix instead.`
         if (queue.currentProcesses) {
           queue.currentProcesses.ytdlp?.kill()
           queue.currentProcesses.ff.kill()
-          cleanupTempFile(queue)
+          dropTemp(queue)
         }
         queue.player.stop()
-        sendHuman(message.channel as any, "Skipped")
+        saySoft(message.channel as any, pick(["skipped~", "next~", "onwards~"]))
         break
 
       case "🔉":
@@ -271,13 +262,13 @@ Replace @bot with a mention of the bot, or use the ? prefix instead.`
         if (queue.currentProcesses) {
           queue.currentProcesses.ytdlp?.kill()
           queue.currentProcesses.ff.kill()
-          cleanupTempFile(queue)
+          dropTemp(queue)
         }
         if (queue.radioFfmpeg) queue.radioFfmpeg.kill()
         queue.songs = []
         queue.radioStopped = true
         queue.player.stop()
-        sendHuman(message.channel as any, "Stopped and queue cleared")
+        saySoft(message.channel as any, "stopped and all cleared~")
         break
 
       case "🎵":
@@ -287,10 +278,10 @@ Replace @bot with a mention of the bot, or use the ? prefix instead.`
             queue.radioFfmpeg = null
           }
           queue.radioStopped = true
-          sendHuman(message.channel as any, "Switching to music mode")
-          if (playSongRef) playSongRef(queue.textChannel?.guild, queue.songs[0])
+          saySoft(message.channel as any, "music mode~")
+          if (playTrackRef) playTrackRef(queue.textChannel?.guild, queue.songs[0])
         } else {
-          sendHuman(message.channel as any, "No songs in queue. Mention me with play to add songs first")
+          saySoft(message.channel as any, "queue's empty~ mention me with play first")
         }
         break
 
@@ -299,15 +290,15 @@ Replace @bot with a mention of the bot, or use the ? prefix instead.`
           if (queue.currentProcesses) {
             queue.currentProcesses.ytdlp?.kill()
             queue.currentProcesses.ff.kill()
-            cleanupTempFile(queue)
+            dropTemp(queue)
           }
           queue.radioStopped = false
-          sendHuman(message.channel as any, "Switching back to radio mode")
+          saySoft(message.channel as any, "back to radio~")
           setTimeout(() => {
             if (playRadioRef) playRadioRef(queue.textChannel?.guild, queue.radioUrl!, queue.radioName!)
           }, 100)
         } else {
-          sendHuman(message.channel as any, "No radio station available. Set one with the radio command first")
+          saySoft(message.channel as any, "no station tuned in yet~")
         }
         break
 
@@ -369,6 +360,6 @@ export {
   removeReactionUI,
   createReactionUI,
   createCommandPanel,
-  setPlaySongFunction,
-  setPlayRadioFunction
+  setPlayTrackFunction,
+  setPlayStationFunction
 }

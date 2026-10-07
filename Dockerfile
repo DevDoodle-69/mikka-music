@@ -19,7 +19,7 @@ COPY package.json tsconfig.json ./
 RUN npm install
 
 # Copy source files
-COPY src ./src/
+COPY app ./app/
 
 # Build TypeScript
 RUN npx tsc
@@ -49,4 +49,4 @@ RUN npm install --omit=dev
 COPY --from=builder /app/dist ./dist/
 
 # Run the application
-CMD ["node", "dist/index.js"]
+CMD ["node", "dist/main.js"]

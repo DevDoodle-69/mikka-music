@@ -1,63 +1,61 @@
 import { joinVoiceChannel, createAudioPlayer } from "@discordjs/voice"
 import { Message, Guild, VoiceChannel, Channel } from "selfbotsdk-discordjs"
-import { queues, saveState, createDefaultQueue } from "../core/queue"
-import { playSong, playRadio } from "../core/player"
-import { removeAllReactionsFromChannel, createCommandPanel } from "../ui/reactions"
-import config from "../config"
+import { queues, saveState, createDefaultQueue } from "../voice/shelf"
+import { playTrack, playStation } from "../voice/jukebox"
+import { removeAllReactionsFromChannel, createCommandPanel } from "../chat/panel"
+import config from "../setup"
 import { Queue } from "../types"
-import { sendMsg, replyHuman, sendHuman } from "../utils/send"
-import { cleanupTempFile } from "../services/mp3api"
+import { tellUser, replySoft, saySoft, pick } from "../tools/say"
+import { dropTemp } from "../web/fetchmp3"
 
 function handleTest(msg: Message): Promise<Message> {
   console.log("Test : ", msg)
-  return replyHuman(msg, "Test command working!")
+  return replySoft(msg, pick(["all good on my end~", "yep, I'm here~", "loud and clear, cutie~"]))
 }
 
 function handleHelp(msg: Message): void {
   const helpEmbed = [
-    "**Music Selfbot Commands**",
+    "**hey~ here's what I can do for you**",
     "",
-    "Mention me to run a command, e.g. @bot play shape of you",
-    "The ? prefix works too, e.g. ?play shape of you",
+    "just mention me, like @Mikka play shape of you",
+    "(the ? prefix works too if you're old-school~)",
     "",
-    "**play** <song name> - Search and play a song",
-    "**play** <single URL> - Play a single YouTube video",
-    "**play** <playlist URL> [limit] - Play a YouTube playlist (optional limit)",
-    "**play** <URL1 URL2 URL3...> - Play multiple URLs (space-separated)",
-    "**skip** - Skip the current song",
-    "**loop** - Toggle loop mode (Off/Single/All)",
-    "**shuffle** - Shuffle the current queue",
-    "**queue** - Show current queue and loop mode",
-    "**stop** - Stop playing and clear queue",
-    "**volume** [0-100] - Set or check playback volume",
-    "**radio** <station name or URL> - Play a radio station",
-    "**radiostats** - Show radio stream statistics",
-    "**clearchat** [number] - Delete messages in text channel (default 100, max 100)",
-    "**leave** - Leave voice channel and clear queue",
-    "**join** <voice_channel_id> - Join voice channel by ID",
-    "**sync** - Sync to the voice channel you are in right now",
-    "**state** - Show current bot state",
-    "**panel** - Show control panel with reaction UI",
-    "**silent** - Toggle silent mode (messages go to DM instead)",
-    "**help** - Show this help message",
+    "**play** <song name> - I'll find it and sing it for you",
+    "**play** <link> - play a YouTube link directly",
+    "**play** <playlist link> [limit] - a whole playlist, your call how many",
+    "**play** <link1 link2 ...> - several links at once, I'm not shy",
+    "**skip** - next song, no hard feelings",
+    "**loop** - round and round: Off / Single / All",
+    "**shuffle** - let fate pick the order",
+    "**queue** - peek at what's coming up",
+    "**stop** - hush, clearing everything",
+    "**volume** [0-100] - louder or softer, you decide",
+    "**radio** <name or link> - tune into a station",
+    "**radiostats** - nerdy radio numbers",
+    "**leave** - I'll slip out of the voice channel",
+    "**join** <voice channel id> - call me somewhere specific",
+    "**sync** - pull me into the voice channel you're in",
+    "**state** - how I'm feeling right now",
+    "**panel** - cute little control panel",
+    "**silent** - shh mode: I whisper in DMs instead",
+    "**clearchat** [number] - tidy up messages",
     "",
-    "*You must be in a voice channel to use these commands*",
-    "The bot auto-joins any voice channel you join."
+    "*join a voice channel first, and I'll follow you in~*"
   ].join("\n")
 
-  sendHuman(msg.channel as any, helpEmbed)
+  saySoft(msg.channel as any, helpEmbed)
 }
 
 async function handleLeave(msg: Message, guild: Guild | undefined, queue: Queue | undefined): Promise<void> {
   if (!queue) {
-    await sendMsg(msg, queue, "Bot belum join ke voice channel")
+    await tellUser(msg, queue, "i'm not in a voice channel right now~")
     return
   }
 
   if (queue.currentProcesses) {
     queue.currentProcesses.ytdlp?.kill()
     queue.currentProcesses.ff.kill()
-    cleanupTempFile(queue)
+    dropTemp(queue)
   }
   if (queue.radioFfmpeg) queue.radioFfmpeg.kill()
   if (queue.metadataDetector) {
@@ -69,7 +67,7 @@ async function handleLeave(msg: Message, guild: Guild | undefined, queue: Queue 
     queue.reactionCollector = null
   }
 
-  await sendMsg(msg, queue, "👋 Keluar dari voice channel")
+  await tellUser(msg, queue, pick(["leaving the voice channel~ bye for now", "slipping out~ call me when you need me"]))
   queue.songs = []
   queue.player.stop()
   queue.connection?.destroy()
@@ -79,7 +77,7 @@ async function handleLeave(msg: Message, guild: Guild | undefined, queue: Queue 
 
 async function handleClearChat(msg: Message, args: string[], queue: Queue | undefined): Promise<void> {
   if (!queue) {
-    await sendMsg(msg, queue, "Bot belum join ke voice channel")
+    await tellUser(msg, queue, "i'm not in a voice channel right now~")
     return
   }
 
@@ -88,7 +86,7 @@ async function handleClearChat(msg: Message, args: string[], queue: Queue | unde
 
   const targetChannel = isDM ? queue.textChannel : textChannel
   if (!targetChannel) {
-    await sendMsg(msg, queue, "Tidak ada text channel target")
+    await tellUser(msg, queue, "which channel, though?~")
     return
   }
 
@@ -97,17 +95,17 @@ async function handleClearChat(msg: Message, args: string[], queue: Queue | unde
   if (countArg) {
     limit = parseInt(countArg)
     if (isNaN(limit) || limit < 1) {
-      await sendMsg(msg, queue, "Masukkan angka yang valid")
+      await tellUser(msg, queue, "that's not a number, silly~")
       return
     }
     if (limit > 100) {
-      await sendMsg(msg, queue, "Maksimal 100 pesan")
+      await tellUser(msg, queue, "max 100 at a time, cutie~")
       return
     }
   }
 
   try {
-    await sendMsg(msg, queue, `🗑️ Menghapus ${limit} pesan terakhir dari text channel server...`)
+    await tellUser(msg, queue, `tidying up ${limit} messages~`)
 
     const messages = await targetChannel.messages.fetch({ limit })
     const twoWeeksAgo = Date.now() - 14 * 24 * 60 * 60 * 1000
@@ -115,7 +113,7 @@ async function handleClearChat(msg: Message, args: string[], queue: Queue | unde
     const messagesToDelete = messages.filter((m: any) => m.createdTimestamp > twoWeeksAgo && m.author.id === msg.client.user!.id)
 
     if (messagesToDelete.size === 0) {
-      await sendMsg(msg, queue, "ℹ️ Tidak ada pesan yang bisa dihapus (pesan lebih dari 14 hari tidak bisa dihapus)")
+      await tellUser(msg, queue, "nothing I can delete~ (messages older than 14 days are untouchable)")
       return
     }
 
@@ -129,53 +127,53 @@ async function handleClearChat(msg: Message, args: string[], queue: Queue | unde
       }
     }
 
-    await sendMsg(msg, queue, `✅ Berhasil menghapus **${deletedCount}** pesan dari text channel server`)
+    await tellUser(msg, queue, `all clean~ removed **${deletedCount}** messages`)
   } catch (err) {
     console.error("Error deleting messages:", err)
-    await sendMsg(msg, queue, "❌ Gagal menghapus pesan: " + (err as Error).message)
+    await tellUser(msg, queue, "couldn't delete those~ " + (err as Error).message)
   }
 }
 
 async function handleClearReactions(msg: Message, queue: Queue | undefined): Promise<void> {
   if (!queue) {
-    await sendMsg(msg, queue, "Bot belum join ke voice channel")
+    await tellUser(msg, queue, "i'm not in a voice channel right now~")
     return
   }
 
   const textChannel = queue.textChannel
   if (!textChannel) {
-    await sendMsg(msg, queue, "Tidak ada text channel terkait")
+    await tellUser(msg, queue, "no text channel to work with~")
     return
   }
 
   if (!textChannel.guild) {
-    await sendMsg(msg, queue, "❌ Command ini tidak bisa digunakan di DM. Gunakan di server text channel.")
+    await tellUser(msg, queue, "that one only works in a server, not DMs~")
     return
   }
 
   try {
-    await sendMsg(msg, queue, "🧹 Menghapus semua reaction dari text channel server...")
+    await tellUser(msg, queue, "clearing all the reactions~")
     await removeAllReactionsFromChannel(textChannel)
-    await sendMsg(msg, queue, "✅ Semua reaction berhasil dihapus dari text channel server")
+    await tellUser(msg, queue, "all reactions gone~ squeaky clean")
   } catch (err) {
     console.error("Error clearing reactions:", err)
-    await sendMsg(msg, queue, "❌ Gagal menghapus reaction: " + (err as Error).message)
+    await tellUser(msg, queue, "couldn't clear those~ " + (err as Error).message)
   }
 }
 
 async function handleSync(msg: Message, args: string[], guild: Guild, voice: VoiceChannel | null, queue: Queue | undefined): Promise<void> {
   if (!queue) {
-    await sendMsg(msg, queue, "❌ Tidak ada queue yang aktif. Gunakan command ?play atau ?radio terlebih dahulu.")
+    await tellUser(msg, queue, "nothing queued yet~ ask me to play something first")
     return
   }
 
   if (!voice) {
-    await sendMsg(msg, queue, "❌ Kamu harus berada di voice channel!")
+    await tellUser(msg, queue, "you need to be in a voice channel first~")
     return
   }
 
   if (!msg.member) {
-    await sendMsg(msg, queue, "❌ Command ini tidak bisa digunakan di DM. Gunakan di server text channel.")
+    await tellUser(msg, queue, "that one only works in a server, not DMs~")
     return
   }
 
@@ -197,24 +195,24 @@ async function handleSync(msg: Message, args: string[], guild: Guild, voice: Voi
     connection.subscribe(queue.player)
     queue.connection = connection
 
-    await sendMsg(msg, queue, "✅ Channel ID berhasil di-sync dan bot sudah join ke voice channel!")
+    await tellUser(msg, queue, "synced~ I'm with you now")
 
     if (queue.radioUrl && queue.radioName && !queue.radioStopped) {
-      playRadio(guild, queue.radioUrl, queue.radioName)
+      playStation(guild, queue.radioUrl, queue.radioName)
     } else if (queue.songs && queue.songs.length > 0) {
-      playSong(guild, queue.songs[0])
+      playTrack(guild, queue.songs[0])
     }
 
     saveState()
   } catch (err) {
     console.error("Error syncing channel:", err)
-    await sendMsg(msg, queue, "❌ Gagal sync channel: " + (err as Error).message)
+    await tellUser(msg, queue, "couldn't sync~ " + (err as Error).message)
   }
 }
 
 async function handleJoin(msg: Message, args: string[], guild: Guild, voice: VoiceChannel | null, queue: Queue | undefined): Promise<void> {
   if (!voice) {
-    await sendMsg(msg, queue, "Join VC dulu")
+    await tellUser(msg, queue, "join a voice channel first, silly~")
     return
   }
 
@@ -257,17 +255,17 @@ async function handleJoin(msg: Message, args: string[], guild: Guild, voice: Voi
     }
 
     if (queue.radioUrl && queue.radioName && !queue.radioStopped) {
-      playRadio(guild, queue.radioUrl, queue.radioName)
+      playStation(guild, queue.radioUrl, queue.radioName)
     } else if (queue.songs && queue.songs.length > 0) {
-      playSong(guild, queue.songs[0])
+      playTrack(guild, queue.songs[0])
     }
 
     saveState()
-    await sendMsg(msg, queue, `✅ Bot berhasil join ke voice channel: **${voice.name}**`)
+    await tellUser(msg, queue, `joined **${voice.name}**~`)
 
   } catch (err) {
     console.error("Error joining voice channel:", err)
-    await sendMsg(msg, queue, "❌ Gagal join ke voice channel: " + (err as Error).message)
+    await tellUser(msg, queue, "couldn't join that voice channel~ " + (err as Error).message)
   }
 }
 
@@ -353,12 +351,12 @@ function handleState(msg: Message): void {
   stateMsg += `\n💾 **State File:** ${config.stateFile}`
   stateMsg += `\n✅ **Total Active Queues:** ${queues.size}`
 
-  sendHuman(msg.channel as any, stateMsg)
+  saySoft(msg.channel as any, stateMsg)
 }
 
 function handlePanel(msg: Message, queue: Queue | undefined): void {
   if (!queue) {
-    sendMsg(msg, queue, "❌ Bot belum join ke voice channel. Gunakan command ?play atau ?radio terlebih dahulu.")
+    tellUser(msg, queue, "i'm not in a voice channel~ play something and I'll come")
     return
   }
   createCommandPanel(msg, queue)
@@ -366,7 +364,7 @@ function handlePanel(msg: Message, queue: Queue | undefined): void {
 
 async function handleSilent(msg: Message, queue: Queue | undefined): Promise<void> {
   if (!queue) {
-    sendMsg(msg, queue, "❌ Tidak ada queue aktif. Join voice channel dulu.")
+    tellUser(msg, queue, "no active queue~ join a voice channel first")
     return
   }
 
@@ -375,9 +373,9 @@ async function handleSilent(msg: Message, queue: Queue | undefined): Promise<voi
   saveState()
 
   if (queue.silent) {
-    await sendMsg(msg, queue, "🔇 Mode silent **ON** - Semua pesan akan dikirim ke DM")
+    await tellUser(msg, queue, "going quiet~ I'll whisper in DMs now")
   } else {
-    await sendHuman(msg.channel as any, "Silent mode OFF - messages will go to the channel")
+    await saySoft(msg.channel as any, "I'm back to talking here~")
   }
 }
 

@@ -3,7 +3,7 @@ import os from "os"
 import path from "path"
 import { Readable } from "stream"
 import { pipeline } from "stream/promises"
-import config from "../config"
+import config from "../setup"
 import { Queue } from "../types"
 
 interface Mp3ResolveResult {
@@ -23,7 +23,7 @@ function sleep(ms: number): Promise<void> {
  * with status "Pending" (sometimes the result is inline instead), then we
  * poll the pollUrl until the result is ready.
  */
-async function resolveMp3(youtubeUrl: string): Promise<Mp3ResolveResult> {
+async function fetchMp3(youtubeUrl: string): Promise<Mp3ResolveResult> {
   if (!config.mp3ApiKey) {
     throw new Error(
       "MP3_API_KEY is not set. Put your downloader API key in the MP3_API_KEY environment variable (or config.json \"mp3ApiKey\")."
@@ -101,9 +101,9 @@ async function fetchJson(url: string, label: string): Promise<any> {
 /**
  * Download the mp3 to a temp file. Tries the direct link first,
  * then the API's proxy URL as a fallback. Returns the temp file path.
- * The caller is responsible for deleting it via cleanupTempFile().
+ * The caller is responsible for deleting it via dropTemp().
  */
-async function downloadMp3(link: string, proxyUrl?: string): Promise<string> {
+async function grabMp3(link: string, proxyUrl?: string): Promise<string> {
   const urls = [link, ...(proxyUrl ? [proxyUrl] : [])]
   let lastError = "no URL"
 
@@ -144,11 +144,11 @@ async function downloadOne(url: string): Promise<string> {
 }
 
 /** Delete the queue's current temp mp3 file, if any. Safe to call anytime. */
-function cleanupTempFile(queue: Queue | undefined | null): void {
+function dropTemp(queue: Queue | undefined | null): void {
   if (!queue?.currentTempFile) return
   const p = queue.currentTempFile
   queue.currentTempFile = null
   fs.unlink(p, () => {})
 }
 
-export { resolveMp3, downloadMp3, cleanupTempFile, Mp3ResolveResult }
+export { fetchMp3, grabMp3, dropTemp, Mp3ResolveResult }

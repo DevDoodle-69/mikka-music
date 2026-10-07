@@ -1,15 +1,15 @@
 import { Client, Guild, VoiceChannel, TextChannel } from "selfbotsdk-discordjs"
-import config from "./config"
+import config from "./setup"
 import http from "http"
-import { queues, loadState, saveState } from "./core/queue"
-import { playSong, playRadio } from "./core/player"
-import { setClient, resumeAllMusic, registerVoiceStateUpdateHandler } from "./core/voice"
-import { handleMessageCreate } from "./commands"
-import { setPlaySongFunction, setPlayRadioFunction } from "./ui/reactions"
+import { queues, loadState, saveState } from "./voice/shelf"
+import { playTrack, playStation } from "./voice/jukebox"
+import { setClient, resumeAllMusic, registerVoiceStateUpdateHandler } from "./voice/session"
+import { handleMessageCreate } from "./orders/desk"
+import { setPlayTrackFunction, setPlayStationFunction } from "./chat/panel"
 import { joinVoiceChannel, createAudioPlayer } from "@discordjs/voice"
 import { Queue } from "./types"
-import { sendToTextChannel } from "./utils/send"
-import { cleanupTempFile } from "./services/mp3api"
+import { tellChannel } from "./tools/say"
+import { dropTemp } from "./web/fetchmp3"
 
 const client = new Client()
 setClient(client)
@@ -21,7 +21,7 @@ function gracefulShutdown(signal: string): void {
     if (queue.currentProcesses) {
       queue.currentProcesses.ytdlp?.kill()
       queue.currentProcesses.ff.kill()
-      cleanupTempFile(queue)
+      dropTemp(queue)
     }
     if (queue.metadataDetector) queue.metadataDetector.stop()
   }
@@ -36,8 +36,8 @@ process.on("uncaughtException", (err) => console.error("Uncaught exception:", er
 client.on("ready", async () => {
   console.log("✅ Logged in as", client.user!.tag)
 
-  setPlaySongFunction(playSong)
-  setPlayRadioFunction(playRadio)
+  setPlayTrackFunction(playTrack)
+  setPlayStationFunction(playStation)
 
   const state = loadState()
   if (state) {
@@ -103,15 +103,15 @@ client.on("ready", async () => {
 
         if (gs.radioUrl && gs.radioName && !gs.radioStopped) {
           console.log(`🔄 Resuming radio on startup: ${gs.radioName}`)
-          sendToTextChannel(queue, "🔄 Reconnecting to radio after startup...")
-          setTimeout(() => playRadio(guild, gs.radioUrl as string, gs.radioName as string), 3000)
+          tellChannel(queue, "warming the radio back up~")
+          setTimeout(() => playStation(guild, gs.radioUrl as string, gs.radioName as string), 3000)
         } else if (gs.songs && (gs.songs as any[]).length > 0) {
           console.log(`🔄 Resuming music queue on startup - ${queue.songs.length} songs`)
           const songs = gs.songs as Array<Record<string, unknown>>
           const resumeFrom = songs[0]?.resumeFrom as number | undefined
           const posStr = resumeFrom ? ` (${Math.floor(resumeFrom / 60)}:${(resumeFrom % 60).toString().padStart(2, "0")})` : ""
-          sendToTextChannel(queue, `🔄 Resuming music after startup${posStr}...`)
-          setTimeout(() => playSong(guild, queue.songs[0]), 3000)
+          tellChannel(queue, "picking up where we left off~")
+          setTimeout(() => playTrack(guild, queue.songs[0]), 3000)
         } else {
           console.log(`ℹ️ No active playback to resume for guild ${guildId}`)
         }

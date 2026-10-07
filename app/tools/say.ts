@@ -19,6 +19,14 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
+ * Pick one of several coy reply variants so she never sounds like
+ * a robot reading the same line twice.
+ */
+function pick<T>(options: T[]): T {
+  return options[Math.floor(Math.random() * options.length)]
+}
+
+/**
  * Human-like delay scaled to the message length, so replies feel typed
  * rather than instant. ~18ms per char, clamped between 0.7s and 2.8s.
  */
@@ -37,20 +45,20 @@ async function typeAndWait(target: { sendTyping?: () => Promise<unknown> } | nul
 }
 
 /** Reply to a message: no emojis, typing indicator, human delay. */
-async function replyHuman(msg: Message, content: string): Promise<Message> {
+async function replySoft(msg: Message, content: string): Promise<Message> {
   const clean = stripEmojis(content)
   await typeAndWait(msg.channel as any, clean)
   return msg.reply(clean)
 }
 
 /** Send plain text to a channel: no emojis, typing indicator, human delay. */
-async function sendHuman(channel: { send: (c: string) => Promise<any>; sendTyping?: () => Promise<unknown> }, content: string): Promise<any> {
+async function saySoft(channel: { send: (c: string) => Promise<any>; sendTyping?: () => Promise<unknown> }, content: string): Promise<any> {
   const clean = stripEmojis(content)
   await typeAndWait(channel as any, clean)
   return channel.send(clean)
 }
 
-async function sendMsg(msg: Message, queue: Queue | undefined | null, content: string): Promise<void> {
+async function tellUser(msg: Message, queue: Queue | undefined | null, content: string): Promise<void> {
   const clean = stripEmojis(content)
   if (queue?.silent) {
     try {
@@ -68,7 +76,7 @@ async function sendMsg(msg: Message, queue: Queue | undefined | null, content: s
   await msg.channel.send(clean)
 }
 
-async function sendToTextChannel(queue: Queue | undefined | null, content: string): Promise<any> {
+async function tellChannel(queue: Queue | undefined | null, content: string): Promise<any> {
   const ch = queue?.textChannel as any
   if (!ch || typeof ch.send !== "function") return
   const clean = stripEmojis(content)
@@ -87,4 +95,4 @@ async function sendToTextChannel(queue: Queue | undefined | null, content: strin
   return await ch.send(clean)
 }
 
-export { stripEmojis, replyHuman, sendHuman, sendMsg, sendToTextChannel }
+export { stripEmojis, pick, replySoft, saySoft, tellUser, tellChannel }

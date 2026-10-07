@@ -17,12 +17,13 @@ const config: Config = {
   cookiesFile: process.env.COOKIES_FILE || path.join(__dirname, "..", "cookies.txt"),
   mp3ApiBase: process.env.MP3_API_BASE || "https://fgsi.dpdns.org/api/downloader/youtube/v2",
   mp3ApiKey: process.env.MP3_API_KEY || "",
-  youtubeCookies: process.env.YOUTUBE_COOKIES || ""
+  youtubeCookies: process.env.YOUTUBE_COOKIES || "",
+  youtubeApiKey: process.env.YOUTUBE_API_KEY || ""
 }
 
 if (!config.token || !config.ownerId || !config.mp3ApiKey) {
   try {
-    const fileConfig: { prefix?: string; token?: string; ownerId?: string; allowedUsers?: string[]; mp3ApiBase?: string; mp3ApiKey?: string; youtubeCookies?: string } = require("../config.json")
+    const fileConfig: { prefix?: string; token?: string; ownerId?: string; allowedUsers?: string[]; mp3ApiBase?: string; mp3ApiKey?: string; youtubeCookies?: string; youtubeApiKey?: string } = require("../config.json")
     config.prefix = fileConfig.prefix || config.prefix
     config.token = fileConfig.token || config.token
     config.ownerId = fileConfig.ownerId || config.ownerId
@@ -30,6 +31,7 @@ if (!config.token || !config.ownerId || !config.mp3ApiKey) {
     config.mp3ApiBase = fileConfig.mp3ApiBase || config.mp3ApiBase
     config.mp3ApiKey = fileConfig.mp3ApiKey || config.mp3ApiKey
     config.youtubeCookies = fileConfig.youtubeCookies || config.youtubeCookies
+    config.youtubeApiKey = fileConfig.youtubeApiKey || config.youtubeApiKey
   } catch {
     // config.json is optional when env vars are set
   }

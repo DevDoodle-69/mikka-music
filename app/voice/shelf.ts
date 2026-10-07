@@ -1,5 +1,5 @@
 import fs from "fs"
-import config from "../config"
+import config from "../setup"
 import { Queue, Song } from "../types"
 
 const queues: Map<string, Queue> = new Map()

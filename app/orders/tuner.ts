@@ -1,30 +1,30 @@
 import { joinVoiceChannel, createAudioPlayer } from "@discordjs/voice"
 import { Message, Guild, VoiceChannel } from "selfbotsdk-discordjs"
-import { queues, saveState, createDefaultQueue } from "../core/queue"
-import { playRadio } from "../core/player"
-import { resolveRadioMetadata } from "../services/radio"
+import { queues, saveState, createDefaultQueue } from "../voice/shelf"
+import { playStation } from "../voice/jukebox"
+import { resolveRadioMetadata } from "../web/airwaves"
 import { Queue } from "../types"
-import { sendMsg } from "../utils/send"
-import { cleanupTempFile } from "../services/mp3api"
+import { tellUser, pick } from "../tools/say"
+import { dropTemp } from "../web/fetchmp3"
 
 async function handleRadio(msg: Message, args: string[], guild: Guild, voice: VoiceChannel | null, queue: Queue | undefined): Promise<void> {
   const query = args.join(" ")
 
   if (!query) {
-    await sendMsg(msg, queue, "Usage: ?radio <station name or URL>")
+    await tellUser(msg, queue, "tell me which station~ like @Mikka radio <name>")
     return
   }
 
   try {
-    await sendMsg(msg, queue, "📻 Searching for radio station...")
+    await tellUser(msg, queue, pick(["hunting for that station~", "let me find that station for you~"]))
 
     const radio = await resolveRadioMetadata(query)
 
-    await sendMsg(msg, queue, `📻 Found: **${radio.name}** ${radio.country ? `(${radio.country})` : ""}`)
+    await tellUser(msg, queue, `found **${radio.name}**${radio.country ? ` (${radio.country})` : ""}~ tuning in`)
 
     if (!queue) {
       if (!voice) {
-        await sendMsg(msg, queue, "Join VC dulu")
+        await tellUser(msg, queue, "join a voice channel first, silly~")
         return
       }
       const connection = joinVoiceChannel({
@@ -59,20 +59,20 @@ async function handleRadio(msg: Message, args: string[], guild: Guild, voice: Vo
     if (queue.currentProcesses) {
       queue.currentProcesses.ytdlp?.kill()
       queue.currentProcesses.ff.kill()
-      cleanupTempFile(queue)
+      dropTemp(queue)
     }
 
-    playRadio(guild, radio.url, radio.name)
+    playStation(guild, radio.url, radio.name)
 
   } catch (err) {
     console.error("Radio error:", err)
-    await sendMsg(msg, queue, "❌ Error: " + (err as Error).message)
+    await tellUser(msg, queue, "oops~ " + (err as Error).message)
   }
 }
 
 async function handleRadioStats(msg: Message, queue: Queue | undefined): Promise<void> {
   if (!queue || !queue.radioFfmpeg) {
-    await sendMsg(msg, queue, "❌ Tidak ada radio yang sedang dimainkan")
+    await tellUser(msg, queue, "no radio playing right now~")
     return
   }
 
@@ -97,7 +97,7 @@ async function handleRadioStats(msg: Message, queue: Queue | undefined): Promise
     statsMsg += `🎵 **Metadata Detector:** Inactive\n`
   }
 
-  await sendMsg(msg, queue, statsMsg)
+  await tellUser(msg, queue, statsMsg)
 }
 
 export { handleRadio, handleRadioStats }
