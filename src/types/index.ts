@@ -109,6 +109,7 @@ export interface Config {
   cookiesFile: string
   mp3ApiBase: string
   mp3ApiKey: string
+  youtubeCookies: string
 }
 
 export interface PlaylistVideoEntry {

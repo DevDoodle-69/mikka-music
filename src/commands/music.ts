@@ -21,7 +21,7 @@ interface PlaylistJSON {
 
 async function getPlaylistVideos(url: string): Promise<PlaylistVideoEntry[]> {
   return new Promise((resolve, reject) => {
-    const ytdlpArgs: string[] = ["--dump-single-json", "--flat-playlist"]
+    const ytdlpArgs: string[] = ["--dump-single-json", "--flat-playlist", "--js-runtimes", "node"]
 
     if (fs.existsSync(config.cookiesFile)) {
       console.log("Cookie masuk (playlist)")

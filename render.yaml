@@ -11,6 +11,8 @@ services:
         sync: false
       - key: MP3_API_KEY
         sync: false
+      - key: YOUTUBE_COOKIES
+        sync: false
       - key: DISCORD_PREFIX
         value: "?"
       - key: NODE_ENV

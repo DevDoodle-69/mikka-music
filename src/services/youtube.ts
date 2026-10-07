@@ -9,7 +9,7 @@ async function searchSong(query: string): Promise<YouTubeSearchResult> {
   console.log("Searching with yt-dlp:", searchQuery)
 
   return new Promise((resolve, reject) => {
-    const ytdlpArgs: string[] = ["--dump-json", "--no-playlist"]
+    const ytdlpArgs: string[] = ["--dump-json", "--no-playlist", "--js-runtimes", "node"]
 
     if (fs.existsSync(config.cookiesFile)) {
       console.log("Cookie masuk")

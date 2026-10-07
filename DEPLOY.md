@@ -86,6 +86,7 @@ This repo ships with a `render.yaml` blueprint and a `Dockerfile`
    - `DISCORD_TOKEN` = your Discord user token
    - `OWNER_ID` = `1306646391325589529`
    - `MP3_API_KEY` = your downloader API key
+   - `YOUTUBE_COOKIES` = full content of your exported YouTube cookies.txt
    - `DISCORD_PREFIX` = `?` (optional)
 4. Deploy. In the logs look for `Logged in as <your tag>`.
 5. Join any voice channel — the bot follows you in instantly.
@@ -109,6 +110,14 @@ Needs `ffmpeg` and `yt-dlp` on PATH for local runs
 
 - **Self-bots violate Discord's Terms of Service** and can get the
   account banned. An alt account is safer than your main.
-- If YouTube search starts failing from Render's IP, add a `cookies.txt`
-  (exported from your logged-in browser) next to `config.json` —
-  the bot picks it up automatically for searches.
+- If YouTube search starts failing from Render's IP ("Sign in to confirm
+  you're not a bot"), give the bot your own login via cookies:
+  1. In your browser, install a cookie-editor extension (e.g.
+     "Get cookies.txt LOCALLY"), log into YouTube, and export cookies
+     for youtube.com — you get a `cookies.txt` file in Netscape format.
+  2. Open that file, copy its **entire content**, and paste it into the
+     `YOUTUBE_COOKIES` environment variable on Render (multiline is fine).
+  3. Redeploy. The bot writes it to a temp cookies file at startup and
+     yt-dlp searches YouTube as your account, which bypasses the bot check.
+  (For local runs you can instead drop that `cookies.txt` next to
+  `config.json`.)
