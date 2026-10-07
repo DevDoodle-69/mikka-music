@@ -123,5 +123,5 @@ export interface YouTubeSearchResult {
   title: string
   url: string
   duration: number
-  durationFormatted: string
+  durationFormatted?: string
 }
