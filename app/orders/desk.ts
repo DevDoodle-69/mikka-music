@@ -11,18 +11,13 @@ async function handleMessageCreate(msg: Message): Promise<void> {
   // Owner-only: this bot answers to exactly one Discord user ID.
   if (msg.author.id !== config.ownerId) return
 
-  // Commands work two ways:
-  //   @BotName play shape of you     (mention prefix)
-  //   ?play shape of you             (classic prefix)
+  // Commands work one way: mention her.
+  //   @BotName play shape of you
   const botId = msg.client.user?.id
-  let body = msg.content
-  if (botId && new RegExp("^<@!?" + botId + ">\\s*").test(body)) {
-    body = body.replace(new RegExp("^<@!?" + botId + ">\\s*"), "")
-  } else if (body.startsWith(config.prefix)) {
-    body = body.slice(config.prefix.length)
-  } else {
-    return
-  }
+  if (!botId) return
+  const mentionRe = new RegExp("^<@!?" + botId + ">\\s*")
+  if (!mentionRe.test(msg.content)) return
+  const body = msg.content.replace(mentionRe, "")
 
   const args = body.trim().split(/ +/)
   const cmd = args.shift()?.toLowerCase() || ""

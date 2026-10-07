@@ -1,6 +1,6 @@
 import { joinVoiceChannel, createAudioPlayer } from "@discordjs/voice"
 import { Client, Guild, VoiceChannel, TextChannel } from "selfbotsdk-discordjs"
-import { queues, saveState, createDefaultQueue } from "./shelf"
+import { queues, saveState, createDefaultQueue, markIntentionalLeave, takeIntentionalLeave } from "./shelf"
 import { playTrack, playStation } from "./jukebox"
 import { tellChannel } from "../tools/say"
 import config from "../setup"
@@ -178,6 +178,7 @@ function registerVoiceStateUpdateHandler(): void {
       const queue = queues.get(oldState.guild.id)
       if (queue && queue.voiceChannelId === oldState.channel.id) {
         console.log("[AUTOJOIN] Owner left the voice channel — leaving too")
+        markIntentionalLeave(oldState.guild.id)
         try { queue.connection?.destroy() } catch {}
         queue.connection = null
         queue.voiceChannelId = null
@@ -188,6 +189,11 @@ function registerVoiceStateUpdateHandler(): void {
     }
 
     if (oldState.member.id === clientRef!.user!.id && oldState.channel && !newState.channel) {
+      // She left on purpose (auto-leave / leave command) — stay out, don't creep back in.
+      if (takeIntentionalLeave(oldState.guild.id)) {
+        console.log("[voice-state] Left that voice channel on purpose — staying out")
+        return
+      }
       console.log("Bot was kicked from voice channel")
       const queue = queues.get(oldState.guild.id)
       if (queue) {

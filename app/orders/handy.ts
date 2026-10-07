@@ -1,6 +1,6 @@
 import { joinVoiceChannel, createAudioPlayer } from "@discordjs/voice"
 import { Message, Guild, VoiceChannel, Channel } from "selfbotsdk-discordjs"
-import { queues, saveState, createDefaultQueue } from "../voice/shelf"
+import { queues, saveState, createDefaultQueue, markIntentionalLeave } from "../voice/shelf"
 import { playTrack, playStation } from "../voice/jukebox"
 import { removeAllReactionsFromChannel, createCommandPanel } from "../chat/panel"
 import config from "../setup"
@@ -18,7 +18,6 @@ function handleHelp(msg: Message): void {
     "**hey~ here's what I can do for you**",
     "",
     "just mention me, like @Mikka play shape of you",
-    "(the ? prefix works too if you're old-school~)",
     "",
     "**play** <song name> - I'll find it and sing it for you",
     "**play** <link> - play a YouTube link directly",
@@ -71,6 +70,7 @@ async function handleLeave(msg: Message, guild: Guild | undefined, queue: Queue 
   await tellUser(msg, queue, pick(["leaving the voice channel~ bye for now", "slipping out~ call me when you need me"]))
   queue.songs = []
   queue.player.stop()
+  if (guild) markIntentionalLeave(guild.id)
   queue.connection?.destroy()
   if (guild) queues.delete(guild.id)
   saveState()

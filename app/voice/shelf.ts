@@ -4,6 +4,27 @@ import { Queue, Song } from "../types"
 
 const queues: Map<string, Queue> = new Map()
 
+// Guilds where the bot left a voice channel ON PURPOSE (auto-leave when the
+// owner leaves, or the leave command). The "kicked" rejoin logic must not
+// resurrect these — otherwise the bot creeps back into the channel it just
+// left. Entries expire after 15s.
+const intentionalLeaves = new Map<string, NodeJS.Timeout>()
+
+function markIntentionalLeave(guildId: string): void {
+  const prev = intentionalLeaves.get(guildId)
+  if (prev) clearTimeout(prev)
+  const t = setTimeout(() => intentionalLeaves.delete(guildId), 15_000)
+  intentionalLeaves.set(guildId, t)
+}
+
+function takeIntentionalLeave(guildId: string): boolean {
+  const t = intentionalLeaves.get(guildId)
+  if (!t) return false
+  clearTimeout(t)
+  intentionalLeaves.delete(guildId)
+  return true
+}
+
 function saveState(stateLog: boolean = true): void {
   const state: Record<string, unknown> = {}
   for (const [guildId, queue] of queues) {
@@ -91,4 +112,4 @@ function createDefaultQueue(overrides: Partial<Queue> = {}): Queue {
   } as Queue
 }
 
-export { queues, saveState, loadState, createDefaultQueue }
+export { queues, saveState, loadState, createDefaultQueue, markIntentionalLeave, takeIntentionalLeave }
