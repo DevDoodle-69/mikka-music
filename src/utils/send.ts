@@ -69,12 +69,13 @@ async function sendMsg(msg: Message, queue: Queue | undefined | null, content: s
 }
 
 async function sendToTextChannel(queue: Queue | undefined | null, content: string): Promise<any> {
-  if (!queue?.textChannel) return
+  const ch = queue?.textChannel as any
+  if (!ch || typeof ch.send !== "function") return
   const clean = stripEmojis(content)
 
-  if (queue.silent && queue.userId) {
+  if (queue!.silent && queue!.userId) {
     try {
-      const user = await queue.textChannel.client.users.fetch(queue.userId)
+      const user = await ch.client.users.fetch(queue!.userId)
       const dm = await user.createDM()
       await typeAndWait(dm as any, clean)
       return await dm.send(clean)
@@ -82,8 +83,8 @@ async function sendToTextChannel(queue: Queue | undefined | null, content: strin
     return
   }
 
-  await typeAndWait(queue.textChannel as any, clean)
-  return await queue.textChannel.send(clean)
+  await typeAndWait(ch as any, clean)
+  return await ch.send(clean)
 }
 
 export { stripEmojis, replyHuman, sendHuman, sendMsg, sendToTextChannel }

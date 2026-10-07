@@ -56,7 +56,9 @@ client.on("ready", async () => {
         continue
       }
 
-      const textChannel = client.channels.cache.get(gs.voiceChannelId as string) as TextChannel | undefined
+      const textChannel = (guild.systemChannel ||
+        guild.channels.cache.find((c: any) => c.isTextBased && c.type === 0) ||
+        guild.channels.cache.first()) as TextChannel | undefined
       console.log(`📝 Found voice channel: ${voiceChannel.name} (${voiceChannel.id})`)
 
       try {

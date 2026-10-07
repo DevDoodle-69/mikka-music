@@ -187,9 +187,9 @@ async function playSong(guild: any, song: Song | undefined): Promise<void> {
 
   // Resolve the YouTube URL to a direct mp3 via the downloader API,
   // then download it to temp storage before playing.
+  await sendToTextChannel(queue, `Fetching audio for **${song.title}**...`)
   let tmpPath: string
   try {
-    await sendToTextChannel(queue, `Fetching audio for **${song.title}**...`)
     const mp3 = await resolveMp3(song.url)
     if (mp3.title && mp3.title !== "Unknown title") song.title = mp3.title
     if (mp3.duration > 0) {

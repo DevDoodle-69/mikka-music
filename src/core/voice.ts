@@ -243,7 +243,17 @@ function registerVoiceStateUpdateHandler(): void {
         console.log("User join ke voice channel baru, bot siap untuk resume")
 
         queue.voiceChannelId = newState.channel.id
-        queue.textChannel = newState.channel
+        // Never store a voice channel as the text channel — find a real one.
+        const ch = queue.textChannel as any
+        if (!ch || typeof ch.send !== "function") {
+          const g = clientRef!.guilds.cache.get(newState.guild.id)
+          const textChannel = (g?.systemChannel ||
+            g?.channels.cache.find((c: any) => c.isTextBased && c.type === 0) ||
+            g?.channels.cache.first()) as TextChannel | undefined
+          if (textChannel && typeof (textChannel as any).send === "function") {
+            queue.textChannel = textChannel as any
+          }
+        }
 
         sendToTextChannel(queue, "🔄 Bot siap untuk melanjutkan. Gunakan command ?play atau ?radio untuk memulai kembali.")
         saveState()
