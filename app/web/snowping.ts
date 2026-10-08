@@ -68,3 +68,53 @@ export async function resolveStream(youtubeUrl: string, timeoutMs = 45000): Prom
     size: dl.size || "",
   }
 }
+
+/**
+ * Download the MP3 stream URL to a temp file (the reliable classic way:
+ * fully fetch first, then play the local file in voice).
+ * Returns the temp file path. Caller owns cleanup via dropTemp().
+ */
+export async function downloadSnowpingMp3(streamUrl: string, timeoutMs = 120000): Promise<string> {
+  const fs = await import("fs")
+  const os = await import("os")
+  const path = await import("path")
+  const { pipeline } = await import("stream/promises")
+
+  const tmp = path.join(os.tmpdir(), `mikka-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp3`)
+  logline("mp3", "downloading mp3 file…")
+
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+  let res: any
+  try {
+    res = await fetch(streamUrl, {
+      signal: ctrl.signal,
+      headers: { "User-Agent": "mikka-music/1.0" },
+    })
+  } catch (err: any) {
+    clearTimeout(timer)
+    throw new Error(`mp3 download unreachable: ${err.message?.slice(0, 100) || err}`)
+  }
+  if (!res.ok) {
+    clearTimeout(timer)
+    throw new Error(`mp3 download HTTP ${res.status}`)
+  }
+  try {
+    const out = fs.createWriteStream(tmp)
+    await pipeline(res.body as any, out)
+  } catch (err: any) {
+    clearTimeout(timer)
+    try { fs.unlinkSync(tmp) } catch {}
+    throw new Error(`mp3 download failed mid-stream: ${err.message?.slice(0, 100) || err}`)
+  }
+  clearTimeout(timer)
+
+  let size = 0
+  try { size = fs.statSync(tmp).size } catch {}
+  if (size < 1024) {
+    try { fs.unlinkSync(tmp) } catch {}
+    throw new Error("mp3 download came back empty")
+  }
+  logline("mp3", `downloaded ${(size / 1024).toFixed(0)}KB`)
+  return tmp
+}

@@ -8,49 +8,11 @@ import { Song, Processes } from "../types"
 import { tellChannel, pick } from "../tools/say"
 import { logline, logerr } from "../tools/log"
 import { formatDuration } from "../tools/timefmt"
-import { fetchMp3, grabMp3, dropTemp } from "../web/fetchmp3"
-import { resolveStream } from "../web/snowping"
+import { dropTemp } from "../web/fetchmp3"
+import { resolveStream, downloadSnowpingMp3 } from "../web/snowping"
 
 interface StreamWithProcesses extends Readable {
   processes: Processes
-}
-
-/**
- * Stream audio straight from a remote URL (e.g. snowping MP3 link).
- * No temp file — ffmpeg pulls and transcodes on the fly.
- */
-function pipeUrl(mediaUrl: string, seekTime: number | null = null): StreamWithProcesses {
-  const ffArgs: string[] = []
-
-  if (seekTime) {
-    const hh = Math.floor(seekTime / 3600)
-    const mm = Math.floor((seekTime % 3600) / 60)
-    const ss = Math.floor(seekTime % 60)
-    ffArgs.push("-ss", `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`)
-  }
-
-  ffArgs.push(
-    "-reconnect", "1",
-    "-reconnect_streamed", "1",
-    "-reconnect_delay_max", "5",
-    "-i", mediaUrl,
-    "-f", "opus",
-    "-ar", "48000",
-    "-ac", "2",
-    "pipe:1"
-  )
-
-  const ff = spawn(config.ffmpeg, ffArgs)
-
-  ff.stderr!.on("data", (data: Buffer) => { console.error("ffmpeg-url stderr:", data.toString().slice(0, 500)) })
-  ff.on("error", (err: Error) => { console.error("ffmpeg-url error:", err) })
-  ff.on("close", (code: number | null) => {
-    if (code !== 0 && code !== null) console.error("ffmpeg-url exited with code:", code)
-  })
-
-  const outStream = ff.stdout as unknown as StreamWithProcesses
-  outStream.processes = { ff }
-  return outStream
 }
 
 function pipeFile(filePath: string, seekTime: number | null = null): StreamWithProcesses {
@@ -221,48 +183,22 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
     delete song.resumeFrom
   }
 
-  // PRIMARY: snowping API -> direct MP3 stream URL -> ffmpeg straight
-  // into voice. No download, no temp file, no API key.
-  // BACKUP: the downloader API (MP3_API_KEY), only if configured.
+  // ONLY PATH: snowping API -> download the MP3 to a temp file ->
+  // play the local file in voice (the classic reliable way).
+  // No API keys, no yt-dlp, no other fallbacks.
   await tellChannel(queue, pick([`fetching **${song.title}** for you~ one sec`, `on it~ grabbing **${song.title}**`, `let me get **${song.title}** ready~`]))
   let audio: StreamWithProcesses | null = null
-  let lastError = ""
   try {
     const track = await resolveStream(song.url)
     if (track.title && track.title !== "Unknown title") song.title = track.title
-    console.log(`[music] streaming directly from snowping for "${song.title}"`)
-    audio = pipeUrl(track.streamUrl, seekTime)
-    queue.currentTempFile = null
+    const tmpPath = await downloadSnowpingMp3(track.streamUrl)
+    queue.currentTempFile = tmpPath
+    logline("music", `playing "${song.title}" from downloaded file`)
+    audio = pipeFile(tmpPath, seekTime)
   } catch (err) {
-    lastError = (err as Error).message || "stream resolve failed"
-    logerr("music", "snowping failed, falling back:", lastError)
-  }
-  if (!audio && config.mp3ApiKey) {
-    try {
-      await tellChannel(queue, `stream hiccup~ trying the backup way for **${song.title}**`)
-      const mp3 = await fetchMp3(song.url)
-      if (mp3.title && mp3.title !== "Unknown title") song.title = mp3.title
-      if (mp3.duration > 0) {
-        song.duration = mp3.duration
-        song.durationFormatted = formatDuration(mp3.duration)
-      }
-      const tmpPath = await grabMp3(mp3.link, mp3.proxyUrl)
-      queue.currentTempFile = tmpPath
-      audio = pipeFile(tmpPath, seekTime)
-    } catch (err) {
-      lastError = (err as Error).message || "backup failed"
-      logerr("music", "backup downloader API failed:", lastError)
-    }
-  }
-  if (!audio) {
-    const blocked = /sign in|not a bot|429|too many requests|forbidden|sabr|all download layers failed/i.test(lastError)
-    const cookiesSet = fs.existsSync(config.cookiesFile)
-    if (blocked && !cookiesSet) {
-      await tellChannel(queue, `youtube's blocking my downloads right now~ set **YOUTUBE_COOKIES** on Render (your logged-in YouTube cookies) and I'll slip right through`)
-    } else {
-      await tellChannel(queue, `couldn't grab **${song.title}** anywhere~ skipping ahead`)
-    }
-    logerr("music", `all audio sources failed for ${song.url}:`, lastError)
+    const lastError = (err as Error).message || "download failed"
+    logerr("music", "snowping download failed:", lastError)
+    await tellChannel(queue, `couldn't fetch **${song.title}** right now~ skipping ahead`)
     queue.playing = false
     dropTemp(queue)
     queue.songs.shift()
