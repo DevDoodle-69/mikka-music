@@ -10,6 +10,8 @@ import { logline, logerr } from "../tools/log"
 import { formatDuration } from "../tools/timefmt"
 import { dropTemp } from "../web/fetchmp3"
 import { resolveStream, downloadSnowpingMp3 } from "../web/snowping"
+import { resolveSpotifyDownload, findOnSpotify } from "../web/spotify"
+import { getPlatform } from "../web/platform"
 
 interface StreamWithProcesses extends Readable {
   processes: Processes
@@ -188,23 +190,60 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
   // No API keys, no yt-dlp, no other fallbacks.
   await tellChannel(queue, pick([`fetching **${song.title}** for you~ one sec`, `on it~ grabbing **${song.title}**`, `let me get **${song.title}** ready~`]))
   let audio: StreamWithProcesses | null = null
+  const platform = song.platform || getPlatform()
   try {
-    const track = await resolveStream(song.url)
-    if (track.title && track.title !== "Unknown title") song.title = track.title
-    if (track.thumbnail) song.thumbnail = track.thumbnail
-    const tmpPath = await downloadSnowpingMp3(track.streamUrl)
-    queue.currentTempFile = tmpPath
-    logline("music", `playing "${song.title}" from downloaded file`)
-    audio = pipeFile(tmpPath, seekTime)
+    if (platform === "spotify") {
+      // Spotify path: resolve download URL -> fetch file -> play.
+      const dl = await resolveSpotifyDownload(song.url)
+      if (dl.title && dl.title !== "Unknown title") {
+        song.title = dl.artist ? `${dl.artist} - ${dl.title}` : dl.title
+      }
+      if (dl.cover) song.thumbnail = dl.cover
+      const tmpPath = await downloadSnowpingMp3(dl.downloadUrl)
+      queue.currentTempFile = tmpPath
+      logline("music", `playing "${song.title}" via spotify`)
+      audio = pipeFile(tmpPath, seekTime)
+    } else {
+      // YouTube path: snowping MP3 -> fetch file -> play.
+      const track = await resolveStream(song.url)
+      if (track.title && track.title !== "Unknown title") song.title = track.title
+      if (track.thumbnail) song.thumbnail = track.thumbnail
+      const tmpPath = await downloadSnowpingMp3(track.streamUrl)
+      queue.currentTempFile = tmpPath
+      logline("music", `playing "${song.title}" from downloaded file`)
+      audio = pipeFile(tmpPath, seekTime)
+    }
   } catch (err) {
     const lastError = (err as Error).message || "download failed"
-    logerr("music", "snowping download failed:", lastError)
-    await tellChannel(queue, `couldn't fetch **${song.title}** right now~ skipping ahead`)
-    queue.playing = false
-    dropTemp(queue)
-    queue.songs.shift()
-    if (queue.songs.length > 0) playTrack(guild, queue.songs[0])
-    return
+    logerr("music", `${platform} download failed:`, lastError)
+    // Auto-fallback: YouTube failed -> try the same song on Spotify.
+    if (platform === "youtube") {
+      const alt = await findOnSpotify(song.title)
+      if (alt) {
+        logline("music", `auto-switching to spotify for "${song.title}"`)
+        await tellChannel(queue, `youtube flopped~ trying spotify for **${song.title}**`)
+        try {
+          const dl = await resolveSpotifyDownload(alt.url)
+          if (dl.cover) song.thumbnail = dl.cover
+          const tmpPath = await downloadSnowpingMp3(dl.downloadUrl)
+          queue.currentTempFile = tmpPath
+          song.platform = "spotify"
+          song.url = alt.url
+          logline("music", `playing "${song.title}" via spotify fallback`)
+          audio = pipeFile(tmpPath, seekTime)
+        } catch (err2) {
+          logerr("music", "spotify fallback also failed:", (err2 as Error).message?.slice(0, 120))
+        }
+      }
+    }
+    if (!audio) {
+      await tellChannel(queue, `couldn't fetch **${song.title}** right now~ skipping ahead`)
+      queue.playing = false
+      dropTemp(queue)
+      queue.songs.shift()
+      if (queue.songs.length > 0) playTrack(guild, queue.songs[0])
+      return
+    }
   }
 
   // Never play into the void: the voice connection must actually be ready.

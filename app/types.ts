@@ -6,6 +6,7 @@ export interface SongData {
   title: string
   url: string
   thumbnail?: string
+  platform?: "youtube" | "spotify"
   duration?: number
   durationFormatted?: string
   resumeFrom?: number

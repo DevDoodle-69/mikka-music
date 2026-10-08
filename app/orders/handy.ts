@@ -6,6 +6,8 @@ import { removeAllReactionsFromChannel, createCommandPanel } from "../chat/panel
 import config from "../setup"
 import { Queue } from "../types"
 import { tellUser, replySoft, saySoft, pick } from "../tools/say"
+import { getPlatform, setPlatform } from "../web/platform"
+import { startSleep, cancelSleep, getSleepInfo } from "../voice/sleep"
 import { dropTemp } from "../web/fetchmp3"
 
 function handleTest(msg: Message): Promise<Message> {
@@ -36,6 +38,8 @@ function handleHelp(msg: Message): void {
     "**state** - how I'm feeling right now",
     "**panel** - cute little control panel",
     "**silent** - shh mode: I whisper in DMs instead",
+    "**sleep** <minutes> - fade out gently and tuck you in (sleep off to cancel)",
+    "**proxyset** <youtube|spotify> - switch music platform (auto-fallback included)",
     "**clearchat** [number] - tidy up messages",
     "",
     "*join a voice channel first, and I'll follow you in (I take about 10 seconds, gotta look cute)~*",
@@ -328,6 +332,84 @@ async function handleSilent(msg: Message, queue: Queue | undefined): Promise<voi
   }
 }
 
+async function handleProxySet(msg: Message, args: string[]): Promise<void> {
+  const want = (args[0] || "").toLowerCase()
+  if (!want) {
+    const cur = getPlatform()
+    await replySoft(msg, pick([
+      `we're on **${cur}** right now~ say @Mikka proxyset spotify or youtube to switch`,
+      `current platform: **${cur}**~ want spotify or youtube?`,
+    ]))
+    return
+  }
+  if (want !== "spotify" && want !== "youtube") {
+    await replySoft(msg, `hmm, I only know **spotify** and **youtube**~ which one?`)
+    return
+  }
+  setPlatform(want)
+  await replySoft(msg, pick([
+    `switched to **${want}**~ fresh vibes incoming`,
+    `**${want}** it is~ let's go`,
+    `platform set to **${want}**~ play something!`,
+  ]))
+}
+
+async function handleSleep(msg: Message, args: string[], guild: Guild | undefined, queue: Queue | undefined): Promise<void> {
+  if (!guild || !queue) {
+    await replySoft(msg, "join a voice channel and play something first~ then I'll tuck you in")
+    return
+  }
+  const arg = (args[0] || "").toLowerCase()
+  if (!arg) {
+    const info = getSleepInfo(guild.id)
+    if (info) {
+      const left = Math.max(1, Math.round((info.endsAt - Date.now()) / 60000))
+      await replySoft(msg, `sleep timer's on~ **${left}** min left before I say goodnight`)
+    } else {
+      await replySoft(msg, "no sleep timer set~ try @Mikka sleep 30")
+    }
+    return
+  }
+  if (arg === "off" || arg === "cancel" || arg === "stop") {
+    if (cancelSleep(guild.id)) {
+      await replySoft(msg, pick(["sleep timer off~ wide awake now", "cancelled~ no sleepy time"]))
+    } else {
+      await replySoft(msg, "there was no sleep timer running~")
+    }
+    return
+  }
+  const minutes = parseInt(arg)
+  if (isNaN(minutes) || minutes < 1 || minutes > 480) {
+    await replySoft(msg, "give me minutes between 1 and 480~ like @Mikka sleep 30")
+    return
+  }
+  startSleep(guild.id, minutes, queue, async () => {
+    // Goodnight: stop everything, whisper, and leave.
+    try { queue.player.removeAllListeners(AudioPlayerStatus.Idle) } catch {}
+    try { queue.player.stop() } catch {}
+    try { queue.currentProcesses?.ff?.kill() } catch {}
+    dropTemp(queue)
+    queue.songs = []
+    queue.playing = false
+    const goodnight = pick([
+      "goodnight~ sleep tight, dream sweet",
+      "shhh~ off to dreamland you go",
+      "night night~ I'll be here when you wake up",
+      "sweet dreams~ the music fades, you drift away",
+    ])
+    await tellUser(msg, queue, goodnight)
+    markIntentionalLeave(guild.id)
+    try { queue.connection?.destroy() } catch {}
+    queues.delete(guild.id)
+    saveState()
+  })
+  await replySoft(msg, pick([
+    `sleep timer set for **${minutes}** min~ I'll fade out gently and say goodnight`,
+    `**${minutes}** minutes till dreamland~ volume fading slowly`,
+    `got it~ **${minutes}** min, then I tuck you in`,
+  ]))
+}
+
 export {
   handleTest,
   handleHelp,
@@ -337,5 +419,7 @@ export {
   handleSync,
   handleState,
   handlePanel,
-  handleSilent
+  handleSilent,
+  handleProxySet,
+  handleSleep
 }

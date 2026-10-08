@@ -11,6 +11,8 @@ import config from "../setup"
 import { Queue, PlaylistVideoEntry, Song } from "../types"
 import { tellUser, stripEmojis, pick } from "../tools/say"
 import { dropTemp } from "../web/fetchmp3"
+import { searchSpotify, findOnSpotify } from "../web/spotify"
+import { getPlatform } from "../web/platform"
 
 interface PlaylistJSON {
   entries: Array<{
@@ -143,6 +145,21 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
         return
       }
 
+      if (getPlatform() === "spotify" && songs.length > 0) {
+        // Cross-platform: find each YouTube track on Spotify instead.
+        await tellUser(msg, queue, `mapping **${songs.length}** songs to spotify~ one sec`)
+        const mapped: Song[] = []
+        for (const song of songs) {
+          const hit = await findOnSpotify(song.title)
+          if (hit) {
+            mapped.push({ title: hit.name, url: hit.url, thumbnail: hit.image, platform: "spotify" })
+          } else {
+            mapped.push(song) // keep the YouTube original as fallback
+          }
+        }
+        songs = mapped
+        logline("music", `playlist cross-mapped to spotify: ${songs.filter(x => x.platform === "spotify").length}/${songs.length}`)
+      }
       if (limit && limit > 0) {
         songs = songs.slice(0, limit)
         await tellUser(msg, queue, `added **${songs.length}** songs~ kept it to ${limit} like you asked`)
@@ -151,14 +168,23 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
       }
     } else {
       try {
-        // Direct links bypass yt-dlp entirely (no YouTube bot wall)
-        const songData = await linkTrack(url)
-        songs.push({
-          title: songData.title,
-          url: songData.url,
-          duration: songData.duration,
-          durationFormatted: songData.durationFormatted
-        })
+        if (/open\.spotify\.com\/(track|episode)/.test(url)) {
+          // Spotify link: search it to get clean metadata, play via Spotify.
+          const m = url.match(/open\.spotify\.com\/(?:track|episode)\/([A-Za-z0-9]+)/)
+          const tracks = await searchSpotify(m ? m[1] : url, 1)
+          const t = tracks[0]
+          if (!t) throw new Error("spotify track not found")
+          songs.push({ title: t.name, url: t.url, thumbnail: t.image, platform: "spotify" })
+        } else {
+          // Direct links bypass yt-dlp entirely (no YouTube bot wall)
+          const songData = await linkTrack(url)
+          songs.push({
+            title: songData.title,
+            url: songData.url,
+            duration: songData.duration,
+            durationFormatted: songData.durationFormatted
+          })
+        }
         await tellUser(msg, queue, pick([`added **${songs[0].title}** just for you~`, `ooh, good taste~ **${songs[0].title}** is in the queue`, `**${songs[0].title}**~ coming right up`]))
       } catch (error) {
         console.error("Error fetching single URL:", error)
@@ -169,13 +195,20 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
     }
   } else {
     try {
-      const songData = await findTrack(query)
-      songs.push({
-        title: songData.title,
-        url: songData.url,
-        duration: songData.duration,
-        durationFormatted: songData.durationFormatted
-      })
+      if (getPlatform() === "spotify") {
+        const tracks = await searchSpotify(query, 1)
+        if (tracks.length === 0) throw new Error("no spotify results")
+        const t = tracks[0]
+        songs.push({ title: t.name, url: t.url, thumbnail: t.image, platform: "spotify" })
+      } else {
+        const songData = await findTrack(query)
+        songs.push({
+          title: songData.title,
+          url: songData.url,
+          duration: songData.duration,
+          durationFormatted: songData.durationFormatted
+        })
+      }
       await tellUser(msg, queue, pick([`added **${songs[0].title}** just for you~`, `ooh, good taste~ **${songs[0].title}** is in the queue`, `**${songs[0].title}**~ coming right up`]))
     } catch (error) {
       console.error("Error searching for song:", error)
