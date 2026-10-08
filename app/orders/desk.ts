@@ -5,7 +5,7 @@ import config from "../setup"
 import { queues, isConnectionLive, leaveAllVoiceSessions } from "../voice/shelf"
 import { handlePlay, handleSkip, handleLoop, handleShuffle, handleQueue, handleStop, handleVolume } from "./tunes"
 import { handleRadio, handleRadioStats } from "./tuner"
-import { handleTest, handleHelp, handleLeave, handleClearChat, handleClearReactions, handleSync, handleState, handlePanel, handleSilent, handleProxySet, handleSleep } from "./handy"
+import { handleTest, handleHelp, handleLeave, handleClearChat, handleClearReactions, handleSync, handleState, handlePanel, handleSilent, handleProxySet, handleSleep, handleStay } from "./handy"
 import { replySoft, saySoft } from "../tools/say"
 import { Queue } from "../types"
 
@@ -117,7 +117,7 @@ async function handleMessageCreate(msg: Message): Promise<void> {
     }
   }
 
-  if (!queue && !["help", "state", "test", "leave", "proxyset"].includes(cmd) && !voice) {
+  if (!queue && !["help", "state", "test", "leave", "proxyset", "stay"].includes(cmd) && !voice) {
     await replySoft(msg, "join a voice channel first~ I'll follow you in")
     return
   }
@@ -216,6 +216,10 @@ async function handleMessageCreate(msg: Message): Promise<void> {
     }
     case "sleep": {
       await handleSleep(msg, args, guild, queue)
+      return
+    }
+    case "stay": {
+      await handleStay(msg)
       return
     }
     case "help": {

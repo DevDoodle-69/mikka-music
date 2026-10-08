@@ -1,6 +1,7 @@
 import { joinVoiceChannel, createAudioPlayer, AudioPlayerStatus } from "@discordjs/voice"
 import { watchConnection } from "./watchdog"
 import { clearSongTimers } from "./jukebox"
+import { isStayMode, setStayMode } from "./stay"
 import { Client, Guild, VoiceChannel, TextChannel } from "selfbotsdk-discordjs"
 import { logline, logerr } from "../tools/log"
 import { queues, saveState, createDefaultQueue, markIntentionalLeave, takeIntentionalLeave, leaveAllVoiceSessions } from "./shelf"
@@ -115,6 +116,10 @@ function registerVoiceStateUpdateHandler(): void {
         // old one immediately so she doesn't linger behind, then follow to the
         // new one after the delay.
         if (oldState.channel && oldState.channel.id !== channelId) {
+          if (isStayMode()) {
+            logline("autojoin", "owner joined another channel — stay mode OFF, following them")
+            setStayMode(false)
+          }
           const oldGuildId = oldState.guild.id
           const prevPending = pendingJoins.get(oldGuildId)
           if (prevPending) {
@@ -214,6 +219,10 @@ function registerVoiceStateUpdateHandler(): void {
 
       const queue = queues.get(oldState.guild.id)
       if (queue && queue.voiceChannelId === oldState.channel.id) {
+        if (isStayMode()) {
+          logline("autojoin", "owner left but stay mode is ON — holding the channel")
+          return
+        }
         logline("autojoin", "owner left the voice channel — leaving too")
         markIntentionalLeave(oldState.guild.id)
         clearSongTimers(queue)

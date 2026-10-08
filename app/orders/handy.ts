@@ -1,6 +1,7 @@
 import { joinVoiceChannel, createAudioPlayer, AudioPlayerStatus } from "@discordjs/voice"
 import { watchConnection } from "../voice/watchdog"
 import { clearSongTimers } from "../voice/jukebox"
+import { isStayMode, setStayMode } from "../voice/stay"
 import { Message, Guild, VoiceChannel, Channel } from "selfbotsdk-discordjs"
 import { queues, saveState, createDefaultQueue, markIntentionalLeave, leaveAllVoiceSessions } from "../voice/shelf"
 import { playTrack, playStation } from "../voice/jukebox"
@@ -43,6 +44,7 @@ function handleHelp(msg: Message): void {
     "**sleep** <minutes> - fade out gently and tuck you in (sleep off to cancel)",
     "**proxyset** <youtube|spotify> - switch music platform (auto-fallback included)",
     "tip: direct .mp3 links play too, and songs crossfade with zero gaps~",
+    "**stay** - I'll hold the voice channel when you leave (off when you join elsewhere)",
     "**clearchat** [number] - tidy up messages",
     "",
     "*join a voice channel first, and I'll follow you in (I take about 10 seconds, gotta look cute)~*",
@@ -54,6 +56,7 @@ function handleHelp(msg: Message): void {
 
 async function handleLeave(msg: Message, guild: Guild | undefined, queue: Queue | undefined): Promise<void> {
   if (queue) clearSongTimers(queue)
+  if (isStayMode()) setStayMode(false)
   if (!queue) {
     await tellUser(msg, queue, "i'm not in a voice channel right now~")
     return
@@ -416,6 +419,24 @@ async function handleSleep(msg: Message, args: string[], guild: Guild | undefine
   ]))
 }
 
+async function handleStay(msg: Message): Promise<void> {
+  const on = !isStayMode()
+  setStayMode(on)
+  if (on) {
+    await replySoft(msg, pick([
+      "stay mode **on**~ I'll hold this channel even if you wander off",
+      "got it~ I'm not going anywhere now, stay mode **on**",
+      "**staying** put~ leave whenever, I'll keep the music going",
+    ]))
+  } else {
+    await replySoft(msg, pick([
+      "stay mode **off**~ I'll follow you like always now",
+      "back to normal~ I'll leave with you from now on",
+      "stay mode **off**~ attached to you again",
+    ]))
+  }
+}
+
 export {
   handleTest,
   handleHelp,
@@ -427,5 +448,6 @@ export {
   handlePanel,
   handleSilent,
   handleProxySet,
-  handleSleep
+  handleSleep,
+  handleStay
 }
