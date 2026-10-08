@@ -1,6 +1,6 @@
 import { joinVoiceChannel, createAudioPlayer, AudioPlayerStatus } from "@discordjs/voice"
 import { Message, Guild, VoiceChannel, Channel } from "selfbotsdk-discordjs"
-import { queues, saveState, createDefaultQueue, markIntentionalLeave } from "../voice/shelf"
+import { queues, saveState, createDefaultQueue, markIntentionalLeave, leaveAllVoiceSessions } from "../voice/shelf"
 import { playTrack, playStation } from "../voice/jukebox"
 import { removeAllReactionsFromChannel, createCommandPanel } from "../chat/panel"
 import config from "../setup"
@@ -32,7 +32,6 @@ function handleHelp(msg: Message): void {
     "**radio** <name or link> - tune into a station",
     "**radiostats** - nerdy radio numbers",
     "**leave** - I'll slip out of the voice channel",
-    "**join** <voice channel id> - call me somewhere specific",
     "**sync** - pull me into the voice channel you're in",
     "**state** - how I'm feeling right now",
     "**panel** - cute little control panel",
@@ -185,6 +184,8 @@ async function handleSync(msg: Message, args: string[], guild: Guild, voice: Voi
     queue.userId = msg.author.id
 
     if (queue.connection) queue.connection.destroy()
+    // Single voice session: leave every other guild first.
+    leaveAllVoiceSessions(guild.id)
 
     const connection = joinVoiceChannel({
       channelId: voice.id,
@@ -212,64 +213,6 @@ async function handleSync(msg: Message, args: string[], guild: Guild, voice: Voi
   }
 }
 
-async function handleJoin(msg: Message, args: string[], guild: Guild, voice: VoiceChannel | null, queue: Queue | undefined): Promise<void> {
-  if (!voice) {
-    await tellUser(msg, queue, "join a voice channel first, silly~")
-    return
-  }
-
-  try {
-    if (queue && queue.connection) queue.connection.destroy()
-
-    const connection = joinVoiceChannel({
-      channelId: voice.id,
-      guildId: guild.id,
-      adapterCreator: guild.voiceAdapterCreator,
-      selfDeaf: false,
-      selfMute: false
-    })
-
-    const player = createAudioPlayer()
-    connection.subscribe(player)
-
-    const playbackChannel = (msg.channel as any).guild
-      ? msg.channel
-      : (voice.guild.systemChannel || voice.guild.channels.cache.find(c => {
-          const ch = c as any
-          return ch.isTextBased && ch.type === 0
-        }) || voice.guild.channels.cache.first())
-
-    if (!queue) {
-      queue = createDefaultQueue({
-        textChannel: playbackChannel as any,
-        connection,
-        player,
-        voiceChannelId: voice.id,
-        userId: msg.author.id
-      })
-      queues.set(guild.id, queue!)
-    } else {
-      queue.connection = connection
-      queue.voiceChannelId = voice.id
-      queue.textChannel = playbackChannel as any
-      queue.userId = msg.author.id
-      connection.subscribe(queue.player)
-    }
-
-    if (queue.radioUrl && queue.radioName && !queue.radioStopped) {
-      playStation(guild, queue.radioUrl, queue.radioName)
-    } else if (queue.songs && queue.songs.length > 0) {
-      playTrack(guild, queue.songs[0])
-    }
-
-    saveState()
-    await tellUser(msg, queue, `joined **${voice.name}**~`)
-
-  } catch (err) {
-    console.error("Error joining voice channel:", err)
-    await tellUser(msg, queue, "couldn't join that voice channel~ " + (err as Error).message)
-  }
-}
 
 function handleState(msg: Message): void {
   let stateMsg = "📊 **Current Bot State**\n\n"
@@ -388,7 +331,6 @@ export {
   handleClearChat,
   handleClearReactions,
   handleSync,
-  handleJoin,
   handleState,
   handlePanel,
   handleSilent

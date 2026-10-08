@@ -1,10 +1,10 @@
 import { AudioPlayerStatus } from "@discordjs/voice"
 import { Message, Guild, VoiceChannel } from "selfbotsdk-discordjs"
 import config from "../setup"
-import { queues, isConnectionLive, markIntentionalLeave, saveState } from "../voice/shelf"
+import { queues, isConnectionLive, leaveAllVoiceSessions } from "../voice/shelf"
 import { handlePlay, handleSkip, handleLoop, handleShuffle, handleQueue, handleStop, handleVolume } from "./tunes"
 import { handleRadio, handleRadioStats } from "./tuner"
-import { handleTest, handleHelp, handleLeave, handleClearChat, handleClearReactions, handleSync, handleJoin, handleState, handlePanel, handleSilent } from "./handy"
+import { handleTest, handleHelp, handleLeave, handleClearChat, handleClearReactions, handleSync, handleState, handlePanel, handleSilent } from "./handy"
 import { replySoft, saySoft } from "../tools/say"
 import { Queue } from "../types"
 
@@ -83,17 +83,12 @@ async function handleMessageCreate(msg: Message): Promise<void> {
     if (ownerGuild && ownerVoice) {
       // She's live, but not where you are (different server OR different
       // voice channel)? Move her to you — no playing to an empty room.
+      // Single voice session: everything else gets torn down first.
       const liveQ = liveGuild ? queues.get(liveGuild.id) : undefined
       const botChannelId = liveQ?.voiceChannelId || null
       if (liveQ && isConnectionLive(liveQ) && botChannelId !== ownerVoice.id) {
         console.log(`[COMMAND] Moving her to you (${ownerGuild.name}/${ownerVoice.name}) for play`)
-        markIntentionalLeave(liveGuild!.id)
-        try { liveQ.connection?.destroy() } catch {}
-        liveQ.connection = null
-        liveQ.voiceChannelId = null
-        try { liveQ.player.removeAllListeners(AudioPlayerStatus.Idle) } catch {}
-        try { liveQ.player.stop() } catch {}
-        saveState()
+        leaveAllVoiceSessions(ownerGuild.id)
       }
       guild = ownerGuild
       voice = ownerVoice
@@ -196,15 +191,6 @@ async function handleMessageCreate(msg: Message): Promise<void> {
       const localVoice = (msg.member?.voice?.channel as VoiceChannel) || null
       const localQueue = queues.get(localGuild.id)
       await handleSync(msg, args, localGuild, localVoice, localQueue)
-      return
-    }
-    case "join": {
-      // Local move: always the message's own server.
-      const localGuild = msg.guild || undefined
-      if (!localGuild) { await replySoft(msg, "that one only works in a server, not DMs~"); return }
-      const localVoice = (msg.member?.voice?.channel as VoiceChannel) || null
-      const localQueue = queues.get(localGuild.id)
-      await handleJoin(msg, args, localGuild, localVoice, localQueue)
       return
     }
     case "help": {

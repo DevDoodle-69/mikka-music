@@ -1,6 +1,6 @@
 import { joinVoiceChannel, createAudioPlayer } from "@discordjs/voice"
 import { Message, Guild, VoiceChannel } from "selfbotsdk-discordjs"
-import { queues, saveState, createDefaultQueue, isConnectionLive } from "../voice/shelf"
+import { queues, saveState, createDefaultQueue, isConnectionLive, leaveAllVoiceSessions } from "../voice/shelf"
 import { playStation } from "../voice/jukebox"
 import { resolveRadioMetadata } from "../web/airwaves"
 import { Queue } from "../types"
@@ -29,6 +29,8 @@ async function handleRadio(msg: Message, args: string[], guild: Guild, voice: Vo
       }
       try { queue?.connection?.destroy() } catch {}
       try { queue?.player?.removeAllListeners() } catch {}
+      // Single voice session: leave every other guild first.
+      leaveAllVoiceSessions(guild.id)
       const connection = joinVoiceChannel({
         channelId: voice.id,
         guildId: guild.id,

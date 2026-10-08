@@ -2,7 +2,7 @@ import { joinVoiceChannel, createAudioPlayer, AudioPlayerStatus } from "@discord
 import { spawn } from "child_process"
 import fs from "fs"
 import { Message, Guild, VoiceChannel, MessageAttachment } from "selfbotsdk-discordjs"
-import { queues, saveState, createDefaultQueue, isConnectionLive } from "../voice/shelf"
+import { queues, saveState, createDefaultQueue, isConnectionLive, leaveAllVoiceSessions } from "../voice/shelf"
 import { playTrack } from "../voice/jukebox"
 import { findTrack, linkTrack, v3Playlist } from "../web/tube"
 import { formatDuration } from "../tools/timefmt"
@@ -194,8 +194,11 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
       await tellUser(msg, queue, "join a voice channel first, silly~ I can't sing to an empty room")
       return
     }
-    // Tear down any dead connection before (re)joining. Always start a fresh
-    // audio player — a reused player can be stuck "playing" into the void.
+    // Tear down any dead connection before (re)joining. Single voice session:
+    // leave every other guild first or Discord yanks sessions and audio dies.
+    // Always start a fresh audio player — a reused one can be stuck "playing"
+    // into the void.
+    leaveAllVoiceSessions(guild.id)
     try { queue?.connection?.destroy() } catch {}
     try { queue?.player?.removeAllListeners() } catch {}
     const connection = joinVoiceChannel({

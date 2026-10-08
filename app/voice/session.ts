@@ -1,6 +1,6 @@
 import { joinVoiceChannel, createAudioPlayer, AudioPlayerStatus } from "@discordjs/voice"
 import { Client, Guild, VoiceChannel, TextChannel } from "selfbotsdk-discordjs"
-import { queues, saveState, createDefaultQueue, markIntentionalLeave, takeIntentionalLeave } from "./shelf"
+import { queues, saveState, createDefaultQueue, markIntentionalLeave, takeIntentionalLeave, leaveAllVoiceSessions } from "./shelf"
 import { playTrack, playStation } from "./jukebox"
 import { tellChannel } from "../tools/say"
 import config from "../setup"
@@ -153,6 +153,10 @@ function registerVoiceStateUpdateHandler(): void {
             if (alreadyThere) return
 
             console.log(`[AUTOJOIN] Joining "${channel.name}" now`)
+            // Single voice session: leave everywhere else first, or Discord
+            // yanks the old session and the bot ping-pongs between channels.
+            leaveAllVoiceSessions(guild.id)
+            // Clear this guild's own stale connection/player too.
             try { existing?.connection?.destroy() } catch {}
             try { existing?.player?.removeAllListeners() } catch {}
             const connection = joinVoiceChannel({

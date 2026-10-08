@@ -1,5 +1,6 @@
 import fs from "fs"
 import config from "../setup"
+import { AudioPlayerStatus } from "@discordjs/voice"
 import { Queue, Song } from "../types"
 
 const queues: Map<string, Queue> = new Map()
@@ -32,6 +33,26 @@ function isConnectionLive(q: Queue | undefined): boolean {
   if (!q || !q.connection) return false
   const status = (q.connection as any).state?.status
   return status !== "destroyed"
+}
+
+// A user account can only hold ONE voice session at a time. If she joins a
+// second voice channel, Discord yanks the first session, the "kicked" handler
+// mistakes it for a kick, and she ping-pongs between channels forever —
+// "playing" messages with no stable audio anywhere except the first server.
+// This enforces the invariant: before joining anywhere, leave everywhere else.
+function leaveAllVoiceSessions(exceptGuildId?: string): void {
+  for (const [gid, q] of queues) {
+    if (exceptGuildId && gid === exceptGuildId) continue
+    if (!q.connection && !q.voiceChannelId) continue
+    console.log(`[voice] Leaving voice session in guild ${gid} (single-session invariant)`)
+    markIntentionalLeave(gid)
+    try { q.connection?.destroy() } catch {}
+    q.connection = null
+    q.voiceChannelId = null
+    try { q.player.removeAllListeners(AudioPlayerStatus.Idle) } catch {}
+    try { q.player.stop() } catch {}
+  }
+  saveState()
 }
 
 function saveState(stateLog: boolean = true): void {
@@ -121,4 +142,4 @@ function createDefaultQueue(overrides: Partial<Queue> = {}): Queue {
   } as Queue
 }
 
-export { queues, saveState, loadState, createDefaultQueue, markIntentionalLeave, takeIntentionalLeave, isConnectionLive }
+export { queues, saveState, loadState, createDefaultQueue, markIntentionalLeave, takeIntentionalLeave, isConnectionLive, leaveAllVoiceSessions }
