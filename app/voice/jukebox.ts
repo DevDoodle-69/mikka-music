@@ -18,7 +18,10 @@ interface StreamWithProcesses extends Readable {
  * Only used when the MP3 downloader API fails.
  */
 function pipeYtdlp(url: string): StreamWithProcesses {
-  const ytdlpArgs: string[] = ["-f", "bestaudio", "-o", "-", "--js-runtimes", "node"]
+  // Android player client bypasses YouTube's datacenter bot-checks that
+  // often block the default web client on server IPs.
+  const ytdlpArgs: string[] = ["-f", "bestaudio", "-o", "-", "--js-runtimes", "node",
+    "--extractor-args", "youtube:player_client=android"]
 
   if (fs.existsSync(config.cookiesFile)) {
     ytdlpArgs.push("--cookies", config.cookiesFile)
@@ -39,6 +42,50 @@ function pipeYtdlp(url: string): StreamWithProcesses {
   const outStream = ff.stdout as unknown as StreamWithProcesses
   outStream.processes = { ytdlp, ff }
   return outStream
+}
+
+/**
+ * Watch an audio pipeline briefly: resolve true if it looks alive,
+ * false if a process dies with an error before producing anything.
+ * Prevents announcing "now spinning" over a dead stream.
+ */
+function verifyPipeline(audio: StreamWithProcesses, timeoutMs = 12000): Promise<boolean> {
+  return new Promise((resolve) => {
+    let done = false
+    const finish = (ok: boolean) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      resolve(ok)
+    }
+    // Still alive after the window -> assume it's streaming fine.
+    const timer = setTimeout(() => finish(true), timeoutMs)
+    const procs = audio.processes as any
+    try {
+      procs.ytdlp?.once("exit", (code: number | null) => {
+        if (code !== 0 && code !== null) {
+          console.error(`[music] yt-dlp died fast (code ${code}) — no audio incoming`)
+          finish(false)
+        }
+      })
+      procs.ytdlp?.once("error", (e: Error) => {
+        console.error("[music] yt-dlp error during verify:", e.message)
+        finish(false)
+      })
+      procs.ff.once("exit", (code: number | null) => {
+        if (code !== 0 && code !== null) {
+          console.error(`[music] ffmpeg died fast (code ${code}) — no audio incoming`)
+          finish(false)
+        }
+      })
+      procs.ff.once("error", (e: Error) => {
+        console.error("[music] ffmpeg error during verify:", e.message)
+        finish(false)
+      })
+    } catch {
+      finish(false)
+    }
+  })
 }
 
 /**
@@ -230,10 +277,34 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
     console.log(`[music] audio file ready, spawning ffmpeg for "${song.title}"`)
     audio = pipeFile(tmpPath, seekTime)
   } catch (err) {
-    console.error("[music] mp3 API failed, falling back to yt-dlp stream:", (err as Error).message)
+    const msg = (err as Error).message || ""
+    console.error("[music] mp3 API failed, falling back to yt-dlp stream:", msg)
+    // If the downloader API rejects the key itself, say so plainly —
+    // no fallback can fix a dead API key.
+    if (/apikey|api key|unauthorized|forbidden|quota|rate limit/i.test(msg)) {
+      await tellChannel(queue, `the music downloader API said no~ (${msg.slice(0, 120)}) check the MP3_API_KEY?`)
+      queue.playing = false
+      dropTemp(queue)
+      queue.songs.shift()
+      if (queue.songs.length > 0) playTrack(guild, queue.songs[0])
+      return
+    }
     await tellChannel(queue, `first try flopped~ let me try another way for **${song.title}**`)
     dropTemp(queue)
     audio = pipeYtdlp(song.url)
+    // Don't fake it: if the fallback pipeline dies before producing
+    // audio, admit it instead of "now spinning" over silence.
+    const alive = await verifyPipeline(audio)
+    if (!alive) {
+      await tellChannel(queue, `couldn't pull audio for **${song.title}**~ skipping to the next`)
+      try { audio.processes.ytdlp?.kill() } catch {}
+      try { audio.processes.ff.kill() } catch {}
+      queue.playing = false
+      dropTemp(queue)
+      queue.songs.shift()
+      if (queue.songs.length > 0) playTrack(guild, queue.songs[0])
+      return
+    }
   }
 
   // Never play into the void: the voice connection must actually be ready.
