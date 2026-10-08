@@ -179,6 +179,24 @@ async function fetchSongFile(song: Song, notify?: (msg: string) => Promise<void>
   }
 }
 
+/** Probe the real duration of a downloaded audio file (seconds). */
+async function probeDuration(tmpPath: string): Promise<number | null> {
+  return new Promise((resolve) => {
+    const ff = spawn("ffprobe", [
+      "-v", "error", "-show_entries", "format=duration",
+      "-of", "default=noprint_wrappers=1:nokey=1", tmpPath,
+    ])
+    let out = ""
+    ff.stdout.on("data", (d: any) => (out += d.toString()))
+    ff.on("close", () => {
+      const v = parseFloat(out.trim())
+      resolve(isFinite(v) && v > 0 ? Math.floor(v) : null)
+    })
+    ff.on("error", () => resolve(null))
+    setTimeout(() => { try { ff.kill() } catch {}; resolve(null) }, 8000)
+  })
+}
+
 /** Set the live playback volume (no-op if nothing playing). */
 function setLiveVolume(queue: any, vol: number, persist = true): void {
   if (persist) queue.volume = vol
@@ -216,8 +234,8 @@ export function clearSongTimers(queue: any): void {
 }
 
 /**
- * While a song plays: 20s before it ends, download the next song in the
- * background; 4s before it ends, fade the volume out. When the song ends,
+ * While a song plays: 60s before it ends, download the next song in the
+ * background; 6s before it ends, fade the volume out. When the song ends,
  * the next one starts instantly from the preloaded file with a fade-in.
  * No gaps, no silence — DJ-style.
  */
@@ -229,8 +247,9 @@ function scheduleNextSongPrep(guild: any, queue: any, song: Song): void {
 
   const targetVol = queue.volume ?? 1.0
 
-  // 1) Pre-download the next song 20s before this one ends.
-  const preMs = Math.max(5_000, (duration - 20) * 1000)
+  // 1) Pre-download the next song 60s before this one ends
+  //    (short songs: start almost immediately so it's ready in time).
+  const preMs = duration > 75 ? (duration - 60) * 1000 : 5_000
   queue.predownloadTimer = setTimeout(async () => {
     // Still the same song playing? (Skip/stop clears the timer anyway.)
     if (queue.songs[0] !== song) return
@@ -249,12 +268,12 @@ function scheduleNextSongPrep(guild: any, queue: any, song: Song): void {
     }
   }, preMs)
 
-  // 2) Fade out 4s before the end.
-  const fadeMs = Math.max(1_000, (duration - 4) * 1000)
+  // 2) Fade out 6s before the end, gliding down over 5s.
+  const fadeMs = Math.max(1_000, (duration - 6) * 1000)
   queue.fadeoutTimer = setTimeout(() => {
     if (queue.songs[0] !== song) return
     logline("music", "fading out for crossfade")
-    queue.fadeTimer = fadeVolume(queue, targetVol, 0, 3200, false)
+    queue.fadeTimer = fadeVolume(queue, targetVol, 0, 5000, false)
   }, fadeMs)
 }
 
@@ -334,6 +353,13 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
     if (pre.title) song.title = pre.title
     if (pre.thumbnail) song.thumbnail = pre.thumbnail
     logline("music", `playing "${song.title}" from preloaded file (zero gap)`)
+    probeDuration(pre.tempFile).then((d) => {
+      if (d && queue.songs[0] === song) {
+        song.duration = d
+        // Re-schedule with the true duration for pixel-perfect fade timing.
+        scheduleNextSongPrep(guild, queue, song)
+      }
+    })
     audio = pipeFile(pre.tempFile, seekTime)
   } else {
     if (pre) {
@@ -344,6 +370,13 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
     try {
       const tmpPath = await fetchSongFile(song, (m) => tellChannel(queue, m))
       queue.currentTempFile = tmpPath
+      const realDur = await probeDuration(tmpPath)
+      if (realDur) {
+        if (song.duration && Math.abs(song.duration - realDur) > 3) {
+          logline("music", `duration corrected: ${song.duration}s -> ${realDur}s`)
+        }
+        song.duration = realDur
+      }
       audio = pipeFile(tmpPath, seekTime)
     } catch (err) {
       await tellChannel(queue, `couldn't fetch **${song.title}** right now~ skipping ahead`)
