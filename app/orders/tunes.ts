@@ -1,3 +1,4 @@
+import { logline } from "../tools/log"
 import { joinVoiceChannel, createAudioPlayer, AudioPlayerStatus } from "@discordjs/voice"
 import { spawn } from "child_process"
 import fs from "fs"
@@ -251,7 +252,7 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
   queue.musicReconnectMessage = null
 
   queue.songs.push(...songs)
-  console.log(`🎵 Adding ${songs.length} songs to queue. Total songs: ${queue.songs.length}`)
+  logline("music", `+${songs.length} song(s) → queue total ${queue.songs.length}`)
   saveState()
   console.log(`💾 State saved. Queue songs count: ${queue.songs.length}`)
 

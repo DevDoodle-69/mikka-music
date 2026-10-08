@@ -1,3 +1,4 @@
+import { logline } from "../tools/log"
 import { AudioPlayerStatus } from "@discordjs/voice"
 import { Message, Guild, VoiceChannel } from "selfbotsdk-discordjs"
 import config from "../setup"
@@ -25,7 +26,7 @@ async function handleMessageCreate(msg: Message): Promise<void> {
   if (!cmd) return
 
   const channelName = (msg.channel as any).name || "DM"
-  console.log(`\x1b[36m[COMMAND]\x1b[0m \x1b[33m${cmd}\x1b[0m | \x1b[35mUser:\x1b[0m ${msg.author.tag} (${msg.author.id}) | \x1b[34mChannel:\x1b[0m ${channelName} (${msg.channel.id}) | \x1b[32mQuery:\x1b[0m ${args.join(" ") || "N/A"}`)
+  logline("command", `${cmd} · ${msg.author.tag} · ${args.join(" ") || "—"}`)
 
   let guild: Guild | undefined = msg.guild || undefined
   let voice: VoiceChannel | null = null
@@ -121,7 +122,7 @@ async function handleMessageCreate(msg: Message): Promise<void> {
     return
   }
 
-  console.log(`[RESOLVE] cmd=${cmd} guild=${guild?.name}(${guild?.id}) voice=${(voice as any)?.name}(${voice?.id}) queue=${queue ? (isConnectionLive(queue) ? "live" : "STALE") : "none"} conn=${(queue?.connection as any)?.state?.status || "none"} owner=${ownerGuild?.name}(${ownerGuild?.id})`)
+  logline("resolve", `${cmd} → ${guild?.name || "?"} · voice=${(voice as any)?.name || "—"} · queue=${queue ? (isConnectionLive(queue) ? "live" : "STALE") : "none"}`)
 
   switch (cmd) {
     case "test": {

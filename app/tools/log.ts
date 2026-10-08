@@ -27,6 +27,38 @@ function stamp(): string {
   return new Date().toLocaleTimeString("en-GB", { hour12: false })
 }
 
+/* ------------------------------------------------------------------ */
+/* Live log ring buffer — the dashboard streams these to the website.  */
+/* ------------------------------------------------------------------ */
+export interface LogEntry {
+  t: string
+  tag: string
+  level: "info" | "error"
+  msg: string
+}
+const LOG_CAP = 120
+const logBuffer: LogEntry[] = []
+
+function capture(tag: string, level: "info" | "error", parts: unknown[]): void {
+  try {
+    const msg = parts
+      .map((p) => {
+        if (typeof p === "string") return p
+        try { return JSON.stringify(p) } catch { return String(p) }
+      })
+      .join(" ")
+    logBuffer.push({ t: stamp(), tag: tag.toLowerCase(), level, msg: msg.slice(0, 500) })
+    if (logBuffer.length > LOG_CAP) logBuffer.splice(0, logBuffer.length - LOG_CAP)
+  } catch {
+    // log capture never breaks logging
+  }
+}
+
+/** Last N captured log entries, newest last. */
+function recentLogs(n = 60): LogEntry[] {
+  return logBuffer.slice(-n)
+}
+
 function paint(tag: string, ...parts: unknown[]): void {
   const key = tag.toLowerCase()
   const color = COLORS[key] ?? DIM
@@ -36,6 +68,7 @@ function paint(tag: string, ...parts: unknown[]): void {
 
 function logline(tag: string, ...parts: unknown[]): void {
   paint(tag, ...parts)
+  capture(tag, "info", parts)
 }
 
 function logerr(tag: string, ...parts: unknown[]): void {
@@ -43,6 +76,7 @@ function logerr(tag: string, ...parts: unknown[]): void {
   const color = COLORS[key] ?? DIM
   const label = tag.padEnd(8, " ")
   console.error(`${DIM}${stamp()}${RESET} ${RED}▸ ${label}${RESET} ·`, ...parts.map(p => `${color}${p}${RESET}`))
+  capture(tag, "error", parts)
 }
 
-export { logline, logerr }
+export { logline, logerr, recentLogs }

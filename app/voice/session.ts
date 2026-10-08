@@ -1,5 +1,6 @@
 import { joinVoiceChannel, createAudioPlayer, AudioPlayerStatus } from "@discordjs/voice"
 import { Client, Guild, VoiceChannel, TextChannel } from "selfbotsdk-discordjs"
+import { logline, logerr } from "../tools/log"
 import { queues, saveState, createDefaultQueue, markIntentionalLeave, takeIntentionalLeave, leaveAllVoiceSessions } from "./shelf"
 import { playTrack, playStation } from "./jukebox"
 import { tellChannel } from "../tools/say"
@@ -119,7 +120,7 @@ function registerVoiceStateUpdateHandler(): void {
           }
           const oldQueue = queues.get(oldGuildId)
           if (oldQueue && (oldQueue.connection || oldQueue.voiceChannelId)) {
-            console.log("[AUTOJOIN] Owner switched voice channels — leaving the old one")
+            logline("autojoin", "owner switched channels — leaving the old one")
             markIntentionalLeave(oldGuildId)
             try { oldQueue.connection?.destroy() } catch {}
             oldQueue.connection = null
@@ -133,7 +134,7 @@ function registerVoiceStateUpdateHandler(): void {
         const prev = pendingJoins.get(guild.id)
         if (prev) clearTimeout(prev)
 
-        console.log(`[AUTOJOIN] Owner joined "${channel.name}" — joining in 10s`)
+        logline("autojoin", `owner joined "${channel.name}" — joining in 10s`)
         const t = setTimeout(async () => {
           pendingJoins.delete(guild.id)
           try {
@@ -144,7 +145,7 @@ function registerVoiceStateUpdateHandler(): void {
             }
             const stillThere = member?.voice?.channel?.id === channelId
             if (!stillThere) {
-              console.log("[AUTOJOIN] Owner left before the 10s delay — not joining")
+              logline("autojoin", "owner left before the 10s delay — not joining")
               return
             }
 
@@ -152,7 +153,7 @@ function registerVoiceStateUpdateHandler(): void {
             const alreadyThere = !!existing?.voiceChannelId && existing.voiceChannelId === channelId && !!existing.connection
             if (alreadyThere) return
 
-            console.log(`[AUTOJOIN] Joining "${channel.name}" now`)
+            logline("autojoin", `joining "${channel.name}" now`)
             // Single voice session: leave everywhere else first, or Discord
             // yanks the old session and the bot ping-pongs between channels.
             leaveAllVoiceSessions(guild.id)
@@ -189,7 +190,7 @@ function registerVoiceStateUpdateHandler(): void {
             }
             saveState()
           } catch (err) {
-            console.error("[AUTOJOIN] Failed to join owner's voice channel:", err)
+            logerr("autojoin", "failed to join owner's voice channel:", err)
           }
         }, AUTOJOIN_DELAY_MS)
         pendingJoins.set(guild.id, t)
@@ -204,12 +205,12 @@ function registerVoiceStateUpdateHandler(): void {
       if (pending) {
         clearTimeout(pending)
         pendingJoins.delete(oldState.guild.id)
-        console.log("[AUTOJOIN] Cancelled pending join (owner left)")
+        logline("autojoin", "cancelled pending join (owner left)")
       }
 
       const queue = queues.get(oldState.guild.id)
       if (queue && queue.voiceChannelId === oldState.channel.id) {
-        console.log("[AUTOJOIN] Owner left the voice channel — leaving too")
+        logline("autojoin", "owner left the voice channel — leaving too")
         markIntentionalLeave(oldState.guild.id)
         try { queue.connection?.destroy() } catch {}
         queue.connection = null

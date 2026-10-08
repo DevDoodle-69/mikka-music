@@ -156,7 +156,7 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
     return
   }
 
-  console.log("Playing:", song)
+  logline("music", `now playing :: "${song.title}"`)
 
   queue.playing = true
 
@@ -191,6 +191,7 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
   try {
     const track = await resolveStream(song.url)
     if (track.title && track.title !== "Unknown title") song.title = track.title
+    if (track.thumbnail) song.thumbnail = track.thumbnail
     const tmpPath = await downloadSnowpingMp3(track.streamUrl)
     queue.currentTempFile = tmpPath
     logline("music", `playing "${song.title}" from downloaded file`)
