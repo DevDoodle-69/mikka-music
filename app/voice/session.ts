@@ -154,6 +154,7 @@ function registerVoiceStateUpdateHandler(): void {
 
             console.log(`[AUTOJOIN] Joining "${channel.name}" now`)
             try { existing?.connection?.destroy() } catch {}
+            try { existing?.player?.removeAllListeners() } catch {}
             const connection = joinVoiceChannel({
               channelId,
               guildId: guild.id,
@@ -161,7 +162,8 @@ function registerVoiceStateUpdateHandler(): void {
               selfDeaf: false,
               selfMute: false
             })
-            const player = existing?.player ?? createAudioPlayer()
+            // Fresh player: a reused one can be stuck "playing" into the void.
+            const player = createAudioPlayer()
             connection.subscribe(player)
 
             if (!existing) {

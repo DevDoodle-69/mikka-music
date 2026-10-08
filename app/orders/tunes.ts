@@ -194,8 +194,10 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
       await tellUser(msg, queue, "join a voice channel first, silly~ I can't sing to an empty room")
       return
     }
-    // Tear down any dead connection before (re)joining.
+    // Tear down any dead connection before (re)joining. Always start a fresh
+    // audio player — a reused player can be stuck "playing" into the void.
     try { queue?.connection?.destroy() } catch {}
+    try { queue?.player?.removeAllListeners() } catch {}
     const connection = joinVoiceChannel({
       channelId: voice.id,
       guildId: guild.id,
@@ -204,7 +206,7 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
       selfMute: false
     })
 
-    const player = queue?.player ?? createAudioPlayer()
+    const player = createAudioPlayer()
     connection.subscribe(player)
 
     const playbackChannel = (msg.channel as any).guild

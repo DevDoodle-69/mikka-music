@@ -28,6 +28,7 @@ async function handleRadio(msg: Message, args: string[], guild: Guild, voice: Vo
         return
       }
       try { queue?.connection?.destroy() } catch {}
+      try { queue?.player?.removeAllListeners() } catch {}
       const connection = joinVoiceChannel({
         channelId: voice.id,
         guildId: guild.id,
@@ -36,7 +37,7 @@ async function handleRadio(msg: Message, args: string[], guild: Guild, voice: Vo
         selfMute: false
       })
 
-      const player = queue?.player ?? createAudioPlayer()
+      const player = createAudioPlayer()
       connection.subscribe(player)
 
       const playbackChannel = (msg.channel as any).guild

@@ -1,4 +1,4 @@
-import { createAudioResource, AudioPlayerStatus, StreamType } from "@discordjs/voice"
+import { createAudioResource, AudioPlayerStatus, StreamType, entersState, VoiceConnectionStatus } from "@discordjs/voice"
 import { spawn } from "child_process"
 import { Readable } from "stream"
 import fs from "fs"
@@ -234,6 +234,30 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
     await tellChannel(queue, `first try flopped~ let me try another way for **${song.title}**`)
     dropTemp(queue)
     audio = pipeYtdlp(song.url)
+  }
+
+  // Never play into the void: the voice connection must actually be ready.
+  // ("now spinning" with no audible audio almost always means the connection
+  // never became ready.)
+  const conn = queue.connection as any
+  if (!conn || conn.state?.status === VoiceConnectionStatus.Destroyed) {
+    console.error("[music] no live voice connection — refusing to play into the void")
+    queue.playing = false
+    dropTemp(queue)
+    await tellChannel(queue, "hmm, I lost my voice connection~ ask me to rejoin?")
+    return
+  }
+  if (conn.state?.status !== VoiceConnectionStatus.Ready) {
+    console.log(`[music] voice connection is "${conn.state?.status}", waiting for ready...`)
+    try {
+      await entersState(conn, VoiceConnectionStatus.Ready, 12_000)
+    } catch {
+      console.error("[music] voice connection never became ready")
+      queue.playing = false
+      dropTemp(queue)
+      await tellChannel(queue, "I can't get a clear voice line in this channel~ try having me rejoin?")
+      return
+    }
   }
 
   const startedAt = seekTime

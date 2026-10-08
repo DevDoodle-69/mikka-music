@@ -81,19 +81,19 @@ async function handleMessageCreate(msg: Message): Promise<void> {
     // Play follows the OWNER: wherever they sit in voice, that's the stage —
     // even if the command came from another server, DM, or inbox.
     if (ownerGuild && ownerVoice) {
-      // She's live somewhere else? Move her to the owner, no lingering behind.
-      if (liveGuild && liveGuild.id !== ownerGuild.id) {
-        const oldQ = queues.get(liveGuild.id)
-        if (oldQ) {
-          console.log(`[COMMAND] Moving her from "${liveGuild.name}" to "${ownerGuild.name}" for play`)
-          markIntentionalLeave(liveGuild.id)
-          try { oldQ.connection?.destroy() } catch {}
-          oldQ.connection = null
-          oldQ.voiceChannelId = null
-          try { oldQ.player.removeAllListeners(AudioPlayerStatus.Idle) } catch {}
-          try { oldQ.player.stop() } catch {}
-          saveState()
-        }
+      // She's live, but not where you are (different server OR different
+      // voice channel)? Move her to you — no playing to an empty room.
+      const liveQ = liveGuild ? queues.get(liveGuild.id) : undefined
+      const botChannelId = liveQ?.voiceChannelId || null
+      if (liveQ && isConnectionLive(liveQ) && botChannelId !== ownerVoice.id) {
+        console.log(`[COMMAND] Moving her to you (${ownerGuild.name}/${ownerVoice.name}) for play`)
+        markIntentionalLeave(liveGuild!.id)
+        try { liveQ.connection?.destroy() } catch {}
+        liveQ.connection = null
+        liveQ.voiceChannelId = null
+        try { liveQ.player.removeAllListeners(AudioPlayerStatus.Idle) } catch {}
+        try { liveQ.player.stop() } catch {}
+        saveState()
       }
       guild = ownerGuild
       voice = ownerVoice
@@ -126,7 +126,7 @@ async function handleMessageCreate(msg: Message): Promise<void> {
     return
   }
 
-  console.log(`[RESOLVE] cmd=${cmd} guild=${guild?.name}(${guild?.id}) voice=${(voice as any)?.name}(${voice?.id}) queue=${queue ? (isConnectionLive(queue) ? "live" : "STALE") : "none"} owner=${ownerGuild?.name}(${ownerGuild?.id})`)
+  console.log(`[RESOLVE] cmd=${cmd} guild=${guild?.name}(${guild?.id}) voice=${(voice as any)?.name}(${voice?.id}) queue=${queue ? (isConnectionLive(queue) ? "live" : "STALE") : "none"} conn=${(queue?.connection as any)?.state?.status || "none"} owner=${ownerGuild?.name}(${ownerGuild?.id})`)
 
   switch (cmd) {
     case "test": {
