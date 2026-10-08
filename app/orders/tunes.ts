@@ -11,7 +11,7 @@ import config from "../setup"
 import { Queue, PlaylistVideoEntry, Song } from "../types"
 import { tellUser, stripEmojis, pick } from "../tools/say"
 import { dropTemp } from "../web/fetchmp3"
-import { searchSpotify, findOnSpotify } from "../web/spotify"
+import { searchSpotify, findOnSpotify, resolveSpotifyPlaylist } from "../web/spotify"
 import { getPlatform } from "../web/platform"
 
 interface PlaylistJSON {
@@ -168,7 +168,14 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
       }
     } else {
       try {
-        if (/open\.spotify\.com\/(track|episode)/.test(url)) {
+        if (/open\.spotify\.com\/(playlist|album)/.test(url)) {
+          // Spotify playlist/album: unwrap via embed page, queue each track.
+          const tracks = await resolveSpotifyPlaylist(url)
+          for (const t of tracks) {
+            songs.push({ title: t.name, url: t.url, platform: "spotify" })
+          }
+          await tellUser(msg, queue, `unwrapped **${tracks.length}** songs from that playlist~ enjoy`)
+        } else if (/open\.spotify\.com\/(track|episode)/.test(url)) {
           // Spotify link: search it to get clean metadata, play via Spotify.
           const m = url.match(/open\.spotify\.com\/(?:track|episode)\/([A-Za-z0-9]+)/)
           const tracks = await searchSpotify(m ? m[1] : url, 1)

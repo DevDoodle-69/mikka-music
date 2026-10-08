@@ -112,3 +112,71 @@ export async function findOnSpotify(title: string): Promise<SpotifyTrack | null>
     return null
   }
 }
+
+/**
+ * Resolve a Spotify playlist/album URL via the public embed page
+ * (no API credentials needed). Returns track entries.
+ */
+export async function resolveSpotifyPlaylist(spotifyUrl: string): Promise<SpotifyTrack[]> {
+  const m = spotifyUrl.match(/open\.spotify\.com\/(playlist|album)\/([A-Za-z0-9]+)/)
+  if (!m) throw new Error("not a spotify playlist/album link")
+  const kind = m[1]
+  const id = m[2]
+  const embedUrl = `https://open.spotify.com/embed/${kind}/${id}`
+  logline("tube", `spotify ${kind} embed: ${id}`)
+
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 20000)
+  let html: string
+  try {
+    const res = await fetch(embedUrl, {
+      signal: ctrl.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+      },
+    })
+    clearTimeout(timer)
+    if (!res.ok) throw new Error(`embed HTTP ${res.status}`)
+    html = await res.text()
+  } catch (err: any) {
+    clearTimeout(timer)
+    throw err
+  }
+
+  // The embed page embeds a JSON trackList array.
+  const idx = html.indexOf('"trackList":[')
+  if (idx === -1) throw new Error("no trackList in spotify embed page")
+  const start = idx + '"trackList":'.length
+  let depth = 0, i = start
+  while (i < html.length) {
+    const c = html[i]
+    if (c === "[") depth++
+    else if (c === "]") { depth--; if (depth === 0) break }
+    i++
+  }
+  const arrStr = html.slice(start, i + 1)
+  let raw: any[]
+  try {
+    raw = JSON.parse(arrStr)
+  } catch {
+    throw new Error("could not parse spotify trackList")
+  }
+
+  const tracks: SpotifyTrack[] = []
+  for (const t of raw) {
+    const uri: string = t?.uri || ""
+    const tid = uri.split(":").pop()
+    if (!tid) continue
+    const title: string = t?.title || "Unknown"
+    const subtitle: string = t?.subtitle || ""
+    tracks.push({
+      id: tid,
+      name: subtitle ? `${title} - ${subtitle}` : title,
+      url: `https://open.spotify.com/track/${tid}`,
+      image: "",
+    })
+  }
+  logline("tube", `spotify ${kind}: ${tracks.length} tracks`)
+  if (tracks.length === 0) throw new Error("spotify playlist was empty")
+  return tracks
+}
