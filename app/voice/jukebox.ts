@@ -215,7 +215,13 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
     }
   }
   if (!audio) {
-    await tellChannel(queue, `couldn't grab **${song.title}** anywhere~ skipping ahead`)
+    const blocked = /sign in|not a bot|429|too many requests|forbidden|sabr|all download layers failed/i.test(lastError)
+    const cookiesSet = fs.existsSync(config.cookiesFile)
+    if (blocked && !cookiesSet) {
+      await tellChannel(queue, `youtube's blocking my downloads right now~ set **YOUTUBE_COOKIES** on Render (your logged-in YouTube cookies) and I'll slip right through`)
+    } else {
+      await tellChannel(queue, `couldn't grab **${song.title}** anywhere~ skipping ahead`)
+    }
     console.error(`[music] all audio sources failed for ${song.url}: ${lastError}`)
     queue.playing = false
     dropTemp(queue)
