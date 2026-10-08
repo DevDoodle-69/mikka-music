@@ -185,12 +185,28 @@ async function handleMessageCreate(msg: Message): Promise<void> {
       return
     }
     case "sync": {
-      // Local move: always the message's own server.
-      const localGuild = msg.guild || undefined
-      if (!localGuild) { await replySoft(msg, "that one only works in a server, not DMs~"); return }
-      const localVoice = (msg.member?.voice?.channel as VoiceChannel) || null
-      const localQueue = queues.get(localGuild.id)
-      await handleSync(msg, args, localGuild, localVoice, localQueue)
+      // Works from anywhere — inbox, DMs, any server: finds the voice channel
+      // you're sitting in and pulls her to you.
+      let syncGuild: Guild | undefined = msg.guild || undefined
+      let syncVoice = (msg.member?.voice?.channel as VoiceChannel) || null
+      if (!syncVoice) {
+        for (const [, g] of msg.client.guilds.cache) {
+          if (msg.guild && g.id === msg.guild.id) continue
+          try {
+            const m = await g.members.fetch(msg.author.id)
+            const vc = m?.voice?.channel as VoiceChannel | null | undefined
+            if (vc) { syncGuild = g; syncVoice = vc; break }
+          } catch {
+            continue
+          }
+        }
+      }
+      if (!syncGuild || !syncVoice) {
+        await replySoft(msg, "join a voice channel first, silly~ then I'll come to you")
+        return
+      }
+      const syncQueue = queues.get(syncGuild.id)
+      await handleSync(msg, args, syncGuild, syncVoice, syncQueue)
       return
     }
     case "help": {

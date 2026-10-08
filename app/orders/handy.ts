@@ -32,7 +32,7 @@ function handleHelp(msg: Message): void {
     "**radio** <name or link> - tune into a station",
     "**radiostats** - nerdy radio numbers",
     "**leave** - I'll slip out of the voice channel",
-    "**sync** - pull me into the voice channel you're in",
+    "**sync** - pull me into the voice channel you're in (works from inbox too~)",
     "**state** - how I'm feeling right now",
     "**panel** - cute little control panel",
     "**silent** - shh mode: I whisper in DMs instead",
@@ -163,29 +163,16 @@ async function handleClearReactions(msg: Message, queue: Queue | undefined): Pro
 }
 
 async function handleSync(msg: Message, args: string[], guild: Guild, voice: VoiceChannel | null, queue: Queue | undefined): Promise<void> {
-  if (!queue) {
-    await tellUser(msg, queue, "nothing queued yet~ ask me to play something first")
-    return
-  }
-
   if (!voice) {
-    await tellUser(msg, queue, "you need to be in a voice channel first~")
-    return
-  }
-
-  if (!msg.member) {
-    await tellUser(msg, queue, "that one only works in a server, not DMs~")
+    await tellUser(msg, queue, "join a voice channel first, silly~")
     return
   }
 
   try {
-    queue.voiceChannelId = voice.id
-    queue.textChannel = msg.channel as any
-    queue.userId = msg.author.id
-
-    if (queue.connection) queue.connection.destroy()
     // Single voice session: leave every other guild first.
     leaveAllVoiceSessions(guild.id)
+    try { queue?.connection?.destroy() } catch {}
+    try { queue?.player?.removeAllListeners() } catch {}
 
     const connection = joinVoiceChannel({
       channelId: voice.id,
@@ -195,10 +182,27 @@ async function handleSync(msg: Message, args: string[], guild: Guild, voice: Voi
       selfMute: false
     })
 
-    connection.subscribe(queue.player)
-    queue.connection = connection
+    const player = createAudioPlayer()
+    connection.subscribe(player)
 
-    await tellUser(msg, queue, "synced~ I'm with you now")
+    if (!queue) {
+      queue = createDefaultQueue({
+        textChannel: msg.channel as any,
+        connection,
+        player,
+        voiceChannelId: voice.id,
+        userId: msg.author.id
+      })
+      queues.set(guild.id, queue)
+    } else {
+      queue.connection = connection
+      queue.player = player
+      queue.voiceChannelId = voice.id
+      queue.textChannel = msg.channel as any
+      queue.userId = msg.author.id
+    }
+
+    await tellUser(msg, queue, pick(["synced~ I'm with you now", "found you~ I'm right here"]))
 
     if (queue.radioUrl && queue.radioName && !queue.radioStopped) {
       playStation(guild, queue.radioUrl, queue.radioName)
