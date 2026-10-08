@@ -1,4 +1,6 @@
 import { joinVoiceChannel, createAudioPlayer, AudioPlayerStatus } from "@discordjs/voice"
+import { watchConnection } from "./watchdog"
+import { clearSongTimers } from "./jukebox"
 import { Client, Guild, VoiceChannel, TextChannel } from "selfbotsdk-discordjs"
 import { logline, logerr } from "../tools/log"
 import { queues, saveState, createDefaultQueue, markIntentionalLeave, takeIntentionalLeave, leaveAllVoiceSessions } from "./shelf"
@@ -51,6 +53,7 @@ async function resumeAllMusic(): Promise<void> {
 
       connection.subscribe(queue.player)
       queue.connection = connection
+      watchConnection(guild, queue)
 
       queue.isReconnecting = false
       queue.radioReconnectAttempts = 0
@@ -170,6 +173,7 @@ function registerVoiceStateUpdateHandler(): void {
             // Fresh player: a reused one can be stuck "playing" into the void.
             const player = createAudioPlayer()
             connection.subscribe(player)
+            watchConnection(guild, existing || { connection, player, voiceChannelId: channelId })
 
             if (!existing) {
               const textChannel = (guild.systemChannel ||
@@ -212,6 +216,7 @@ function registerVoiceStateUpdateHandler(): void {
       if (queue && queue.voiceChannelId === oldState.channel.id) {
         logline("autojoin", "owner left the voice channel — leaving too")
         markIntentionalLeave(oldState.guild.id)
+        clearSongTimers(queue)
         try { queue.connection?.destroy() } catch {}
         queue.connection = null
         queue.voiceChannelId = null
@@ -267,6 +272,7 @@ function registerVoiceStateUpdateHandler(): void {
                 })
                 connection.subscribe(queue.player)
                 queue.connection = connection
+                watchConnection(guild, queue)
                 tellChannel(queue, "i'm back~")
                 queue.radioReconnectAttempts = 0
                 queue.musicReconnectAttempts = 0

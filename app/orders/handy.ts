@@ -1,4 +1,6 @@
 import { joinVoiceChannel, createAudioPlayer, AudioPlayerStatus } from "@discordjs/voice"
+import { watchConnection } from "../voice/watchdog"
+import { clearSongTimers } from "../voice/jukebox"
 import { Message, Guild, VoiceChannel, Channel } from "selfbotsdk-discordjs"
 import { queues, saveState, createDefaultQueue, markIntentionalLeave, leaveAllVoiceSessions } from "../voice/shelf"
 import { playTrack, playStation } from "../voice/jukebox"
@@ -40,6 +42,7 @@ function handleHelp(msg: Message): void {
     "**silent** - shh mode: I whisper in DMs instead",
     "**sleep** <minutes> - fade out gently and tuck you in (sleep off to cancel)",
     "**proxyset** <youtube|spotify> - switch music platform (auto-fallback included)",
+    "tip: direct .mp3 links play too, and songs crossfade with zero gaps~",
     "**clearchat** [number] - tidy up messages",
     "",
     "*join a voice channel first, and I'll follow you in (I take about 10 seconds, gotta look cute)~*",
@@ -50,6 +53,7 @@ function handleHelp(msg: Message): void {
 }
 
 async function handleLeave(msg: Message, guild: Guild | undefined, queue: Queue | undefined): Promise<void> {
+  if (queue) clearSongTimers(queue)
   if (!queue) {
     await tellUser(msg, queue, "i'm not in a voice channel right now~")
     return
@@ -188,6 +192,7 @@ async function handleSync(msg: Message, args: string[], guild: Guild, voice: Voi
 
     const player = createAudioPlayer()
     connection.subscribe(player)
+    watchConnection(guild, queue)
 
     if (!queue) {
       queue = createDefaultQueue({
@@ -385,6 +390,7 @@ async function handleSleep(msg: Message, args: string[], guild: Guild | undefine
   }
   startSleep(guild.id, minutes, queue, async () => {
     // Goodnight: stop everything, whisper, and leave.
+    clearSongTimers(queue)
     try { queue.player.removeAllListeners(AudioPlayerStatus.Idle) } catch {}
     try { queue.player.stop() } catch {}
     try { queue.currentProcesses?.ff?.kill() } catch {}

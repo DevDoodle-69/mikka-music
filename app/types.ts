@@ -6,7 +6,7 @@ export interface SongData {
   title: string
   url: string
   thumbnail?: string
-  platform?: "youtube" | "spotify"
+  platform?: "youtube" | "spotify" | "direct"
   duration?: number
   durationFormatted?: string
   resumeFrom?: number
@@ -78,6 +78,11 @@ export interface Queue {
   currentSong?: CurrentSong
   currentProcesses?: Processes
   currentTempFile?: string | null
+  /** Background pre-download: next song's file, ready for zero-gap switch. */
+  preloaded?: { songUrl: string; tempFile: string; title: string; thumbnail?: string } | null
+  predownloadTimer?: NodeJS.Timeout
+  fadeoutTimer?: NodeJS.Timeout
+  fadeTimer?: NodeJS.Timeout
   reactionMessage?: Message
   reactionCollector: ReactionCollector | null
   panelMessage?: Message

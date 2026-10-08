@@ -126,6 +126,138 @@ function fixStreamError(guild: any, song: Song, source: string, error: Error | n
   }, delay)
 }
 
+
+/**
+ * Download a song's audio to a temp file. Mutates song with resolved
+ * title/thumbnail/platform. Returns the temp file path. Throws on failure.
+ * Used by playTrack AND the background pre-downloader.
+ */
+async function fetchSongFile(song: Song, notify?: (msg: string) => Promise<void>): Promise<string> {
+  const platform = song.platform || getPlatform()
+  try {
+    if (platform === "direct") {
+      const tmpPath = await downloadSnowpingMp3(song.url)
+      logline("music", `fetched direct audio "${song.title}"`)
+      return tmpPath
+    }
+    if (platform === "spotify") {
+      const dl = await resolveSpotifyDownload(song.url)
+      if (dl.title && dl.title !== "Unknown title") {
+        song.title = dl.artist ? `${dl.artist} - ${dl.title}` : dl.title
+      }
+      if (dl.cover) song.thumbnail = dl.cover
+      const tmpPath = await downloadSnowpingMp3(dl.downloadUrl)
+      logline("music", `fetched "${song.title}" via spotify`)
+      return tmpPath
+    }
+    // YouTube path.
+    const track = await resolveStream(song.url)
+    if (track.title && track.title !== "Unknown title") song.title = track.title
+    if (track.thumbnail) song.thumbnail = track.thumbnail
+    const tmpPath = await downloadSnowpingMp3(track.streamUrl)
+    logline("music", `fetched "${song.title}" from downloaded file`)
+    return tmpPath
+  } catch (err) {
+    const lastError = (err as Error).message || "download failed"
+    logerr("music", `${platform} download failed:`, lastError)
+    // Auto-fallback: YouTube failed -> try the same song on Spotify.
+    if (platform === "youtube") {
+      const alt = await findOnSpotify(song.title)
+      if (alt) {
+        logline("music", `auto-switching to spotify for "${song.title}"`)
+        if (notify) await notify(`youtube flopped~ trying spotify for **${song.title}**`)
+        const dl = await resolveSpotifyDownload(alt.url)
+        if (dl.cover) song.thumbnail = dl.cover
+        const tmpPath = await downloadSnowpingMp3(dl.downloadUrl)
+        song.platform = "spotify"
+        song.url = alt.url
+        logline("music", `fetched "${song.title}" via spotify fallback`)
+        return tmpPath
+      }
+    }
+    throw err
+  }
+}
+
+/** Set the live playback volume (no-op if nothing playing). */
+function setLiveVolume(queue: any, vol: number, persist = true): void {
+  if (persist) queue.volume = vol
+  try {
+    const st = queue.player?.state
+    if (st?.status === AudioPlayerStatus.Playing && st.resource?.volume) {
+      st.resource.volume.setVolume(Math.max(0, vol))
+    }
+  } catch {}
+}
+
+/** Smooth volume ramp. Returns the interval timer. */
+function fadeVolume(queue: any, from: number, to: number, ms: number, persist = true): NodeJS.Timeout {
+  const steps = Math.max(4, Math.floor(ms / 150))
+  const stepMs = ms / steps
+  let step = 0
+  const timer = setInterval(() => {
+    step++
+    setLiveVolume(queue, from + ((to - from) * step) / steps, persist)
+    if (step >= steps) clearInterval(timer)
+  }, stepMs)
+  return timer
+}
+
+/** Clear any pending pre-download / fade timers for a queue. */
+export function clearSongTimers(queue: any): void {
+  if (queue.predownloadTimer) { clearTimeout(queue.predownloadTimer); queue.predownloadTimer = undefined }
+  if (queue.fadeoutTimer) { clearTimeout(queue.fadeoutTimer); queue.fadeoutTimer = undefined }
+  if (queue.fadeTimer) { clearInterval(queue.fadeTimer); queue.fadeTimer = undefined }
+  // Drop a preloaded file that will never be used.
+  if (queue.preloaded) {
+    try { fs.unlinkSync(queue.preloaded.tempFile) } catch {}
+    queue.preloaded = null
+  }
+}
+
+/**
+ * While a song plays: 20s before it ends, download the next song in the
+ * background; 4s before it ends, fade the volume out. When the song ends,
+ * the next one starts instantly from the preloaded file with a fade-in.
+ * No gaps, no silence — DJ-style.
+ */
+function scheduleNextSongPrep(guild: any, queue: any, song: Song): void {
+  clearSongTimers(queue)
+  const next = queue.songs[1]
+  const duration = song.duration
+  if (!next || !duration || duration < 30) return
+
+  const targetVol = queue.volume ?? 1.0
+
+  // 1) Pre-download the next song 20s before this one ends.
+  const preMs = Math.max(5_000, (duration - 20) * 1000)
+  queue.predownloadTimer = setTimeout(async () => {
+    // Still the same song playing? (Skip/stop clears the timer anyway.)
+    if (queue.songs[0] !== song) return
+    try {
+      logline("music", `pre-downloading next: "${next.title}"`)
+      const tmpPath = await fetchSongFile(next)
+      // Song changed while downloading — drop it.
+      if (queue.songs[0] !== song || queue.songs[1] !== next) {
+        try { fs.unlinkSync(tmpPath) } catch {}
+        return
+      }
+      queue.preloaded = { songUrl: next.url, tempFile: tmpPath, title: next.title, thumbnail: next.thumbnail }
+      logline("music", `preloaded "${next.title}" — ready for zero-gap switch`)
+    } catch (err) {
+      logerr("music", "pre-download failed (will retry on switch):", (err as Error).message?.slice(0, 100))
+    }
+  }, preMs)
+
+  // 2) Fade out 4s before the end.
+  const fadeMs = Math.max(1_000, (duration - 4) * 1000)
+  queue.fadeoutTimer = setTimeout(() => {
+    if (queue.songs[0] !== song) return
+    logline("music", "fading out for crossfade")
+    queue.fadeTimer = fadeVolume(queue, targetVol, 0, 3200, false)
+  }, fadeMs)
+}
+
 async function playTrack(guild: any, song: Song | undefined): Promise<void> {
   const queue = queues.get(guild.id)
   if (!queue) return
@@ -188,55 +320,32 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
   // ONLY PATH: snowping API -> download the MP3 to a temp file ->
   // play the local file in voice (the classic reliable way).
   // No API keys, no yt-dlp, no other fallbacks.
-  await tellChannel(queue, pick([`fetching **${song.title}** for you~ one sec`, `on it~ grabbing **${song.title}**`, `let me get **${song.title}** ready~`]))
+  // Preloaded file from the background pre-downloader? Use it instantly — zero gap.
+  const pre = queue.preloaded
+  const _wasPre = !!(pre && pre.songUrl === song.url)
+  if (!_wasPre) {
+    await tellChannel(queue, pick([`fetching **${song.title}** for you~ one sec`, `on it~ grabbing **${song.title}**`, `let me get **${song.title}** ready~`]))
+  }
   let audio: StreamWithProcesses | null = null
-  const platform = song.platform || getPlatform()
-  try {
-    if (platform === "spotify") {
-      // Spotify path: resolve download URL -> fetch file -> play.
-      const dl = await resolveSpotifyDownload(song.url)
-      if (dl.title && dl.title !== "Unknown title") {
-        song.title = dl.artist ? `${dl.artist} - ${dl.title}` : dl.title
-      }
-      if (dl.cover) song.thumbnail = dl.cover
-      const tmpPath = await downloadSnowpingMp3(dl.downloadUrl)
-      queue.currentTempFile = tmpPath
-      logline("music", `playing "${song.title}" via spotify`)
-      audio = pipeFile(tmpPath, seekTime)
-    } else {
-      // YouTube path: snowping MP3 -> fetch file -> play.
-      const track = await resolveStream(song.url)
-      if (track.title && track.title !== "Unknown title") song.title = track.title
-      if (track.thumbnail) song.thumbnail = track.thumbnail
-      const tmpPath = await downloadSnowpingMp3(track.streamUrl)
-      queue.currentTempFile = tmpPath
-      logline("music", `playing "${song.title}" from downloaded file`)
-      audio = pipeFile(tmpPath, seekTime)
+  const wasPreloaded = !!(pre && pre.songUrl === song.url)
+  if (wasPreloaded) {
+    queue.preloaded = null
+    queue.currentTempFile = pre!.tempFile
+    if (pre.title) song.title = pre.title
+    if (pre.thumbnail) song.thumbnail = pre.thumbnail
+    logline("music", `playing "${song.title}" from preloaded file (zero gap)`)
+    audio = pipeFile(pre.tempFile, seekTime)
+  } else {
+    if (pre) {
+      // Stale preload (skip/queue changed) — clean it up.
+      try { fs.unlinkSync(pre.tempFile) } catch {}
+      queue.preloaded = null
     }
-  } catch (err) {
-    const lastError = (err as Error).message || "download failed"
-    logerr("music", `${platform} download failed:`, lastError)
-    // Auto-fallback: YouTube failed -> try the same song on Spotify.
-    if (platform === "youtube") {
-      const alt = await findOnSpotify(song.title)
-      if (alt) {
-        logline("music", `auto-switching to spotify for "${song.title}"`)
-        await tellChannel(queue, `youtube flopped~ trying spotify for **${song.title}**`)
-        try {
-          const dl = await resolveSpotifyDownload(alt.url)
-          if (dl.cover) song.thumbnail = dl.cover
-          const tmpPath = await downloadSnowpingMp3(dl.downloadUrl)
-          queue.currentTempFile = tmpPath
-          song.platform = "spotify"
-          song.url = alt.url
-          logline("music", `playing "${song.title}" via spotify fallback`)
-          audio = pipeFile(tmpPath, seekTime)
-        } catch (err2) {
-          logerr("music", "spotify fallback also failed:", (err2 as Error).message?.slice(0, 120))
-        }
-      }
-    }
-    if (!audio) {
+    try {
+      const tmpPath = await fetchSongFile(song, (m) => tellChannel(queue, m))
+      queue.currentTempFile = tmpPath
+      audio = pipeFile(tmpPath, seekTime)
+    } catch (err) {
       await tellChannel(queue, `couldn't fetch **${song.title}** right now~ skipping ahead`)
       queue.playing = false
       dropTemp(queue)
@@ -322,6 +431,17 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
   })
 
   queue.player.play(resource)
+
+  // Crossfade in: if we faded the previous song out, rise back up smoothly.
+  // (Fresh plays start at full volume; only preloaded zero-gap switches fade in.)
+  if (wasPreloaded) {
+    const targetVol = queue.volume ?? 1.0
+    setLiveVolume(queue, 0, false)
+    queue.fadeTimer = fadeVolume(queue, 0, targetVol, 2000, true)
+  }
+
+  // DJ mode: pre-download the next song 20s before this ends + fade out.
+  scheduleNextSongPrep(guild, queue, song)
 
   queue.player.removeAllListeners("error")
   queue.connection?.removeAllListeners("error")

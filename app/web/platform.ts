@@ -10,6 +10,8 @@ import path from "path"
 import { logline } from "../tools/log"
 
 export type Platform = "youtube" | "spotify"
+/** Song-level platform; "direct" = raw audio file URL. */
+export type SongPlatform = Platform | "direct"
 
 const FILE = path.join(os.tmpdir(), "mikka-platform.json")
 let current: Platform = "youtube"

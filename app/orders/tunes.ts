@@ -4,13 +4,14 @@ import { spawn } from "child_process"
 import fs from "fs"
 import { Message, Guild, VoiceChannel, MessageAttachment } from "selfbotsdk-discordjs"
 import { queues, saveState, createDefaultQueue, isConnectionLive, leaveAllVoiceSessions } from "../voice/shelf"
-import { playTrack } from "../voice/jukebox"
+import { playTrack, clearSongTimers } from "../voice/jukebox"
 import { findTrack, linkTrack, v3Playlist } from "../web/tube"
 import { formatDuration } from "../tools/timefmt"
 import config from "../setup"
 import { Queue, PlaylistVideoEntry, Song } from "../types"
 import { tellUser, stripEmojis, pick } from "../tools/say"
 import { dropTemp } from "../web/fetchmp3"
+import { watchConnection } from "../voice/watchdog"
 import { searchSpotify, findOnSpotify, resolveSpotifyPlaylist } from "../web/spotify"
 import { getPlatform } from "../web/platform"
 
@@ -108,7 +109,17 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
 
     for (const url of urls) {
       try {
-        if (url.includes("list=")) {
+        if (/\.(mp3|m4a|ogg|oga|wav|flac|opus|aac)(\?|#|$)/i.test(url)) {
+          const fname = decodeURIComponent((url.split("/").pop() || "audio file").split("?")[0])
+          songs.push({ title: fname.replace(/\.(mp3|m4a|ogg|oga|wav|flac|opus|aac)$/i, ""), url, platform: "direct" })
+        } else if (/open\.spotify\.com\/(playlist|album)/.test(url)) {
+          const tracks = await resolveSpotifyPlaylist(url)
+          for (const t of tracks) songs.push({ title: t.name, url: t.url, platform: "spotify" })
+        } else if (/open\.spotify\.com\/(track|episode)/.test(url)) {
+          const m = url.match(/open\.spotify\.com\/(?:track|episode)\/([A-Za-z0-9]+)/)
+          const tracks = await searchSpotify(m ? m[1] : url, 1)
+          if (tracks[0]) songs.push({ title: tracks[0].name, url: tracks[0].url, thumbnail: tracks[0].image, platform: "spotify" })
+        } else if (url.includes("list=")) {
           await tellUser(msg, queue, "ooh, a playlist~ let me unwrap it for you")
           const playlistSongs = await resolvePlaylist(url)
           songs.push(...playlistSongs)
@@ -168,7 +179,12 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
       }
     } else {
       try {
-        if (/open\.spotify\.com\/(playlist|album)/.test(url)) {
+        if (/\.(mp3|m4a|ogg|oga|wav|flac|opus|aac)(\?|#|$)/i.test(url)) {
+          // Direct audio file: download and play, no search needed.
+          const fname = decodeURIComponent((url.split("/").pop() || "audio file").split("?")[0])
+          songs.push({ title: fname.replace(/\.(mp3|m4a|ogg|oga|wav|flac|opus|aac)$/i, ""), url, platform: "direct" })
+          await tellUser(msg, queue, `grabbing that audio file for you~`)
+        } else if (/open\.spotify\.com\/(playlist|album)/.test(url)) {
           // Spotify playlist/album: unwrap via embed page, queue each track.
           const tracks = await resolveSpotifyPlaylist(url)
           for (const t of tracks) {
@@ -252,6 +268,7 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
 
     const player = createAudioPlayer()
     connection.subscribe(player)
+    watchConnection(guild, queue)
 
     const playbackChannel = (msg.channel as any).guild
       ? msg.channel
@@ -304,6 +321,7 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
 async function handleSkip(msg: Message, queue: Queue | undefined): Promise<void> {
   if (queue) {
     queue.isSkipping = true
+    clearSongTimers(queue)
     if (queue.currentProcesses) {
       queue.currentProcesses.ytdlp?.kill()
       queue.currentProcesses.ff.kill()
@@ -392,6 +410,7 @@ async function handleQueue(msg: Message, queue: Queue | undefined): Promise<void
 }
 
 async function handleStop(msg: Message, queue: Queue | undefined): Promise<void> {
+  if (queue) clearSongTimers(queue)
   if (!queue) {
     await tellUser(msg, queue, "nothing's playing at the moment~")
     return
