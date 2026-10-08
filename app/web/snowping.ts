@@ -6,6 +6,8 @@
  * No API key needed. Returns a direct MP3 stream URL that ffmpeg can play
  * straight into voice — no temp file download required.
  */
+import { logline, logerr } from "../tools/log"
+
 const API_BASE = process.env.SNOWPING_API_BASE || "https://api.snowping.cfd/api/downloader/youtube"
 
 export interface SnowpingTrack {
@@ -24,7 +26,7 @@ export interface SnowpingTrack {
  */
 export async function resolveStream(youtubeUrl: string, timeoutMs = 45000): Promise<SnowpingTrack> {
   const apiUrl = `${API_BASE}?url=${encodeURIComponent(youtubeUrl)}&format=mp3`
-  console.log(`[snowping] resolving stream for ${youtubeUrl}`)
+  logline("mp3", "resolving direct stream")
 
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), timeoutMs)
@@ -56,7 +58,7 @@ export async function resolveStream(youtubeUrl: string, timeoutMs = 45000): Prom
     throw new Error(`snowping API: ${String(msg).slice(0, 120)}`)
   }
 
-  console.log(`[snowping] got stream (${dl.size || "?"}) for "${(video?.title || "").slice(0, 60)}"`)
+  logline("mp3", `got stream (${dl.size || "?"}) :: "${(video?.title || "").slice(0, 50)}"`)
   return {
     title: video?.title || "Unknown title",
     duration: video?.duration || "",

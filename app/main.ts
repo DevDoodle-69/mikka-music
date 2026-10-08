@@ -13,9 +13,12 @@ import { joinVoiceChannel, createAudioPlayer } from "@discordjs/voice"
 import { Queue } from "./types"
 import { tellChannel } from "./tools/say"
 import { dropTemp } from "./web/fetchmp3"
+import { setDashboardClient, handleRequest } from "./web/dashboard"
+import { logline } from "./tools/log"
 
 const client = new Client()
 setClient(client)
+setDashboardClient(client)
 
 function gracefulShutdown(signal: string): void {
   console.log(`Received ${signal}, shutting down gracefully...`)
@@ -157,12 +160,14 @@ client.on("messageCreate", handleMessageCreate)
 
 client.login(config.token)
 
-// Tiny health endpoint so hosts like Render (web services) see the
-// process as alive. Uses only Node's built-in http module.
+// Web dashboard + health endpoint so hosts like Render (web services)
+// see the process as alive. Uses only Node's built-in http module.
 const PORT = Number(process.env.PORT) || 3000
 http
   .createServer((req, res) => {
+    if (handleRequest(req, res)) return
+    // Fallback: plain health check for uptime monitors
     res.writeHead(200, { "Content-Type": "text/plain" })
     res.end("ok")
   })
-  .listen(PORT, () => console.log(`🌐 Health endpoint listening on port ${PORT}`))
+  .listen(PORT, () => logline("net", `dashboard live on port ${PORT}`))

@@ -6,9 +6,9 @@ import config from "../setup"
 import { queues, saveState } from "./shelf"
 import { Song, Processes } from "../types"
 import { tellChannel, pick } from "../tools/say"
+import { logline, logerr } from "../tools/log"
 import { formatDuration } from "../tools/timefmt"
 import { fetchMp3, grabMp3, dropTemp } from "../web/fetchmp3"
-import { grabAudio } from "../web/grabber"
 import { resolveStream } from "../web/snowping"
 
 interface StreamWithProcesses extends Readable {
@@ -223,9 +223,7 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
 
   // PRIMARY: snowping API -> direct MP3 stream URL -> ffmpeg straight
   // into voice. No download, no temp file, no API key.
-  // FALLBACK 1: multi-layer yt-dlp download (yt-dlp-exec -> system yt-dlp
-  // -> ytdl-core) if snowping is down.
-  // FALLBACK 2: the old MP3 downloader API, only if MP3_API_KEY is set.
+  // BACKUP: the downloader API (MP3_API_KEY), only if configured.
   await tellChannel(queue, pick([`fetching **${song.title}** for you~ one sec`, `on it~ grabbing **${song.title}**`, `let me get **${song.title}** ready~`]))
   let audio: StreamWithProcesses | null = null
   let lastError = ""
@@ -237,23 +235,11 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
     queue.currentTempFile = null
   } catch (err) {
     lastError = (err as Error).message || "stream resolve failed"
-    console.error("[music] snowping failed, falling back to yt-dlp download:", lastError)
-  }
-  if (!audio) {
-    try {
-      await tellChannel(queue, `stream hiccup~ downloading **${song.title}** the classic way`)
-      const tmpPath = await grabAudio(song.url)
-      queue.currentTempFile = tmpPath
-      console.log(`[music] audio file ready, spawning ffmpeg for "${song.title}"`)
-      audio = pipeFile(tmpPath, seekTime)
-    } catch (err) {
-      lastError = (err as Error).message || "download failed"
-      console.error("[music] all yt-dlp layers failed:", lastError)
-    }
+    logerr("music", "snowping failed, falling back:", lastError)
   }
   if (!audio && config.mp3ApiKey) {
     try {
-      await tellChannel(queue, `still no luck~ trying the last backup for **${song.title}**`)
+      await tellChannel(queue, `stream hiccup~ trying the backup way for **${song.title}**`)
       const mp3 = await fetchMp3(song.url)
       if (mp3.title && mp3.title !== "Unknown title") song.title = mp3.title
       if (mp3.duration > 0) {
@@ -265,7 +251,7 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
       audio = pipeFile(tmpPath, seekTime)
     } catch (err) {
       lastError = (err as Error).message || "backup failed"
-      console.error("[music] backup downloader API also failed:", lastError)
+      logerr("music", "backup downloader API failed:", lastError)
     }
   }
   if (!audio) {
@@ -276,7 +262,7 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
     } else {
       await tellChannel(queue, `couldn't grab **${song.title}** anywhere~ skipping ahead`)
     }
-    console.error(`[music] all audio sources failed for ${song.url}: ${lastError}`)
+    logerr("music", `all audio sources failed for ${song.url}:`, lastError)
     queue.playing = false
     dropTemp(queue)
     queue.songs.shift()
@@ -289,7 +275,7 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
   // never became ready.)
   const conn = queue.connection as any
   if (!conn || conn.state?.status === VoiceConnectionStatus.Destroyed) {
-    console.error("[music] no live voice connection — refusing to play into the void")
+    logerr("music", "no live voice connection — refusing to play into the void")
     queue.playing = false
     dropTemp(queue)
     await tellChannel(queue, "hmm, I lost my voice connection~ ask me to rejoin?")
