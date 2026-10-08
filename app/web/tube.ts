@@ -97,13 +97,19 @@ async function v3Playlist(urlOrId: string): Promise<YouTubeSearchResult[]> {
 }
 
 /** yt-dlp fallback search (needs cookies on datacenter IPs). */
-async function ytdlpSearch(query: string): Promise<YouTubeSearchResult> {
+async function ytdlpSearchOnce(query: string, androidClient: boolean): Promise<YouTubeSearchResult> {
   const searchQuery = query.startsWith("https://") ? query : `ytsearch:${query}`
 
-  console.log("[tube] searching with yt-dlp:", searchQuery)
+  console.log("[tube] searching with yt-dlp:", searchQuery, androidClient ? "(android client)" : "")
 
   return new Promise((resolve, reject) => {
     const ytdlpArgs: string[] = ["--dump-json", "--no-playlist", "--js-runtimes", "node"]
+
+    // Android player client sails past YouTube's datacenter bot-checks
+    // when the default web client gets challenged.
+    if (androidClient) {
+      ytdlpArgs.push("--extractor-args", "youtube:player_client=android")
+    }
 
     if (fs.existsSync(config.cookiesFile)) {
       ytdlpArgs.push("--cookies", config.cookiesFile)
@@ -148,6 +154,19 @@ async function ytdlpSearch(query: string): Promise<YouTubeSearchResult> {
       reject(new Error(`Failed to execute yt-dlp: ${err.message}`))
     })
   })
+}
+
+/**
+ * yt-dlp search with a retry: if the default web client hits YouTube's
+ * bot-check (common on datacenter IPs), try again as the Android client.
+ */
+async function ytdlpSearch(query: string): Promise<YouTubeSearchResult> {
+  try {
+    return await ytdlpSearchOnce(query, false)
+  } catch (err) {
+    console.log("[tube] yt-dlp default search failed, retrying with android client:", (err as Error).message)
+    return ytdlpSearchOnce(query, true)
+  }
 }
 
 /**
