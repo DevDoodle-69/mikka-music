@@ -9,9 +9,48 @@ import { tellChannel, pick } from "../tools/say"
 import { formatDuration } from "../tools/timefmt"
 import { fetchMp3, grabMp3, dropTemp } from "../web/fetchmp3"
 import { grabAudio } from "../web/grabber"
+import { resolveStream } from "../web/snowping"
 
 interface StreamWithProcesses extends Readable {
   processes: Processes
+}
+
+/**
+ * Stream audio straight from a remote URL (e.g. snowping MP3 link).
+ * No temp file — ffmpeg pulls and transcodes on the fly.
+ */
+function pipeUrl(mediaUrl: string, seekTime: number | null = null): StreamWithProcesses {
+  const ffArgs: string[] = []
+
+  if (seekTime) {
+    const hh = Math.floor(seekTime / 3600)
+    const mm = Math.floor((seekTime % 3600) / 60)
+    const ss = Math.floor(seekTime % 60)
+    ffArgs.push("-ss", `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`)
+  }
+
+  ffArgs.push(
+    "-reconnect", "1",
+    "-reconnect_streamed", "1",
+    "-reconnect_delay_max", "5",
+    "-i", mediaUrl,
+    "-f", "opus",
+    "-ar", "48000",
+    "-ac", "2",
+    "pipe:1"
+  )
+
+  const ff = spawn(config.ffmpeg, ffArgs)
+
+  ff.stderr!.on("data", (data: Buffer) => { console.error("ffmpeg-url stderr:", data.toString().slice(0, 500)) })
+  ff.on("error", (err: Error) => { console.error("ffmpeg-url error:", err) })
+  ff.on("close", (code: number | null) => {
+    if (code !== 0 && code !== null) console.error("ffmpeg-url exited with code:", code)
+  })
+
+  const outStream = ff.stdout as unknown as StreamWithProcesses
+  outStream.processes = { ff }
+  return outStream
 }
 
 function pipeFile(filePath: string, seekTime: number | null = null): StreamWithProcesses {
@@ -182,24 +221,39 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
     delete song.resumeFrom
   }
 
-  // PRIMARY: multi-layer direct download (yt-dlp-exec -> system yt-dlp
-  // -> ytdl-core) — no API, no key, no quota.
-  // BACKUP: the MP3 downloader API, only if MP3_API_KEY is configured.
+  // PRIMARY: snowping API -> direct MP3 stream URL -> ffmpeg straight
+  // into voice. No download, no temp file, no API key.
+  // FALLBACK 1: multi-layer yt-dlp download (yt-dlp-exec -> system yt-dlp
+  // -> ytdl-core) if snowping is down.
+  // FALLBACK 2: the old MP3 downloader API, only if MP3_API_KEY is set.
   await tellChannel(queue, pick([`fetching **${song.title}** for you~ one sec`, `on it~ grabbing **${song.title}**`, `let me get **${song.title}** ready~`]))
   let audio: StreamWithProcesses | null = null
   let lastError = ""
   try {
-    const tmpPath = await grabAudio(song.url)
-    queue.currentTempFile = tmpPath
-    console.log(`[music] audio file ready, spawning ffmpeg for "${song.title}"`)
-    audio = pipeFile(tmpPath, seekTime)
+    const track = await resolveStream(song.url)
+    if (track.title && track.title !== "Unknown title") song.title = track.title
+    console.log(`[music] streaming directly from snowping for "${song.title}"`)
+    audio = pipeUrl(track.streamUrl, seekTime)
+    queue.currentTempFile = null
   } catch (err) {
-    lastError = (err as Error).message || "download failed"
-    console.error("[music] all yt-dlp layers failed:", lastError)
+    lastError = (err as Error).message || "stream resolve failed"
+    console.error("[music] snowping failed, falling back to yt-dlp download:", lastError)
+  }
+  if (!audio) {
+    try {
+      await tellChannel(queue, `stream hiccup~ downloading **${song.title}** the classic way`)
+      const tmpPath = await grabAudio(song.url)
+      queue.currentTempFile = tmpPath
+      console.log(`[music] audio file ready, spawning ffmpeg for "${song.title}"`)
+      audio = pipeFile(tmpPath, seekTime)
+    } catch (err) {
+      lastError = (err as Error).message || "download failed"
+      console.error("[music] all yt-dlp layers failed:", lastError)
+    }
   }
   if (!audio && config.mp3ApiKey) {
     try {
-      await tellChannel(queue, `direct download flopped~ trying the backup way for **${song.title}**`)
+      await tellChannel(queue, `still no luck~ trying the last backup for **${song.title}**`)
       const mp3 = await fetchMp3(song.url)
       if (mp3.title && mp3.title !== "Unknown title") song.title = mp3.title
       if (mp3.duration > 0) {
