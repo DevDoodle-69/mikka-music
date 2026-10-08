@@ -21,7 +21,7 @@ const config: Config = {
   youtubeApiKey: process.env.YOUTUBE_API_KEY || ""
 }
 
-if (!config.token || !config.ownerId || !config.mp3ApiKey) {
+if (!config.token || !config.ownerId) {
   try {
     const fileConfig: { prefix?: string; token?: string; ownerId?: string; allowedUsers?: string[]; mp3ApiBase?: string; mp3ApiKey?: string; youtubeCookies?: string; youtubeApiKey?: string } = require("../config.json")
     config.prefix = fileConfig.prefix || config.prefix

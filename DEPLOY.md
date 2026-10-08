@@ -110,10 +110,11 @@ This repo ships with a `render.yaml` blueprint and a `Dockerfile`
 3. In **Environment**, add:
    - `DISCORD_TOKEN` = your Discord user token
    - `OWNER_ID` = `1306646391325589529`
-   - `MP3_API_KEY` = your downloader API key
-   - `YOUTUBE_API_KEY` = your YouTube Data API v3 key
+   - `YOUTUBE_API_KEY` = your YouTube Data API v3 key (for fast search)
    - `YOUTUBE_COOKIES` = full content of your exported YouTube cookies.txt
-     (backup for search if the API key hits quota)
+     (helps yt-dlp downloads bypass bot-checks — recommended)
+   - `MP3_API_KEY` = your downloader API key (optional backup only —
+     the bot downloads audio directly with yt-dlp and needs no API key)
    - `DISCORD_PREFIX` = `?` (optional)
 4. Deploy. In the logs look for `Logged in as <your tag>`.
 5. Join any voice channel — the bot follows you in instantly.
