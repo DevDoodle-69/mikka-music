@@ -6,7 +6,8 @@ WORKDIR /app
 RUN apk add --no-cache \
     curl \
     python3 \
-    build-base
+    build-base \
+    && ln -sf /usr/bin/python3 /usr/bin/python
 
 # Download yt-dlp
 RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /yt-dlp \
@@ -36,6 +37,7 @@ RUN apk add --no-cache \
     ffmpeg \
     python3 \
     tzdata \
+    && ln -sf /usr/bin/python3 /usr/bin/python \
     && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
     && echo $TZ > /etc/timezone
 

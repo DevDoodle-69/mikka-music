@@ -2,100 +2,16 @@ import { createAudioResource, AudioPlayerStatus, StreamType, entersState, VoiceC
 import { spawn } from "child_process"
 import { Readable } from "stream"
 import fs from "fs"
-import os from "os"
-import path from "path"
 import config from "../setup"
 import { queues, saveState } from "./shelf"
 import { Song, Processes } from "../types"
 import { tellChannel, pick } from "../tools/say"
 import { formatDuration } from "../tools/timefmt"
 import { fetchMp3, grabMp3, dropTemp } from "../web/fetchmp3"
+import { grabAudio } from "../web/grabber"
 
 interface StreamWithProcesses extends Readable {
   processes: Processes
-}
-
-/**
- * PRIMARY audio path: download best audio straight from YouTube with yt-dlp.
- * No downloader API, no API key, no quota — just yt-dlp + ffmpeg.
- * Downloads to a temp file first so failures are detected BEFORE playback.
- * Returns the temp file path. Throws on failure.
- */
-function downloadYtdlp(url: string, timeoutMs = 180000): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const tmp = path.join(os.tmpdir(), `mikka-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.dl`)
-    const baseArgs: string[] = [
-      "-f", "bestaudio",
-      "--no-playlist",
-      "--retries", "3",
-      "--fragment-retries", "3",
-      "--js-runtimes", "node",
-      "-o", tmp,
-    ]
-    if (fs.existsSync(config.cookiesFile)) baseArgs.push("--cookies", config.cookiesFile)
-
-    // Client order: android first (bypasses YouTube's datacenter bot-checks),
-    // then the default web client as fallback.
-    const clientVariants: string[][] = [
-      ["--extractor-args", "youtube:player_client=android"],
-      [],
-    ]
-
-    let attempt = 0
-    let finished = false
-    const finish = (err: Error | null, file?: string) => {
-      if (finished) return
-      finished = true
-      clearTimeout(timer)
-      if (err) reject(err)
-      else resolve(file!)
-    }
-    const timer = setTimeout(() => {
-      try { fs.unlinkSync(tmp) } catch {}
-      finish(new Error("download timed out after 3 minutes — YouTube may be throttling this network"))
-    }, timeoutMs)
-
-    const tryDownload = () => {
-      const args = [...baseArgs, ...clientVariants[attempt], url]
-      console.log(`[music] yt-dlp download attempt ${attempt + 1} (${attempt === 0 ? "android client" : "default client"})`)
-      let stderr = ""
-      let dl: any
-      try {
-        dl = spawn(config.ytdlpExecutable, args)
-      } catch (e) {
-        finish(e as Error)
-        return
-      }
-      dl.stderr?.on("data", (d: Buffer) => { stderr += d.toString() })
-      dl.on("error", (e: Error) => {
-        try { fs.unlinkSync(tmp) } catch {}
-        finish(new Error(`yt-dlp failed to start: ${e.message}`))
-      })
-      dl.on("close", (code: number | null) => {
-        if (finished) return
-        let size = 0
-        try { size = fs.statSync(tmp).size } catch {}
-        if (code === 0 && size > 0) {
-          console.log(`[music] yt-dlp grabbed ${(size / 1024).toFixed(0)}KB`)
-          finish(null, tmp)
-          return
-        }
-        const blocked = /sign in to confirm|not a bot|429|too many requests|forbidden/i.test(stderr)
-        if (blocked && attempt + 1 < clientVariants.length) {
-          console.log("[music] yt-dlp hit a bot-check, switching client and retrying...")
-          try { fs.unlinkSync(tmp) } catch {}
-          attempt++
-          tryDownload()
-          return
-        }
-        try { fs.unlinkSync(tmp) } catch {}
-        const hint = stderr.slice(-300).trim().split("\n").pop() || "unknown error"
-        finish(new Error(`yt-dlp download failed (code ${code}): ${hint}`))
-      })
-    }
-
-    tryDownload()
-  })
 }
 
 function pipeFile(filePath: string, seekTime: number | null = null): StreamWithProcesses {
@@ -266,20 +182,20 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
     delete song.resumeFrom
   }
 
-  // PRIMARY: download audio directly with yt-dlp — no API, no key, no quota.
-  // BACKUP: the MP3 downloader API, only if MP3_API_KEY is configured
-  // (useful when its quota resets; never required).
+  // PRIMARY: multi-layer direct download (yt-dlp-exec -> system yt-dlp
+  // -> ytdl-core) — no API, no key, no quota.
+  // BACKUP: the MP3 downloader API, only if MP3_API_KEY is configured.
   await tellChannel(queue, pick([`fetching **${song.title}** for you~ one sec`, `on it~ grabbing **${song.title}**`, `let me get **${song.title}** ready~`]))
   let audio: StreamWithProcesses | null = null
   let lastError = ""
   try {
-    const tmpPath = await downloadYtdlp(song.url)
+    const tmpPath = await grabAudio(song.url)
     queue.currentTempFile = tmpPath
     console.log(`[music] audio file ready, spawning ffmpeg for "${song.title}"`)
     audio = pipeFile(tmpPath, seekTime)
   } catch (err) {
     lastError = (err as Error).message || "download failed"
-    console.error("[music] yt-dlp direct download failed:", lastError)
+    console.error("[music] all yt-dlp layers failed:", lastError)
   }
   if (!audio && config.mp3ApiKey) {
     try {
