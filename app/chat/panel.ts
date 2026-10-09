@@ -1,6 +1,7 @@
 import { Message, TextChannel, MessageReaction, ReactionCollector, User } from "selfbotsdk-discordjs"
 import { Queue } from "../types"
-import { saySoft, pick } from "../tools/say"
+import { saySoft } from "../tools/say"
+import * as lines from "./lines"
 import { dropTemp } from "../web/fetchmp3"
 
 async function removeAllReactionsFromChannel(channel: TextChannel): Promise<void> {
@@ -239,7 +240,7 @@ async function createCommandPanel(message: Message, queue: Queue): Promise<React
           dropTemp(queue)
         }
         queue.player.stop()
-        saySoft(message.channel as any, pick(["skipped~", "next~", "onwards~"]))
+        saySoft(message.channel as any, lines.panelSkipped())
         break
 
       case "🔉":

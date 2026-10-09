@@ -8,14 +8,15 @@ import { playTrack, playStation } from "../voice/jukebox"
 import { removeAllReactionsFromChannel, createCommandPanel } from "../chat/panel"
 import config from "../setup"
 import { Queue } from "../types"
-import { tellUser, replySoft, saySoft, pick } from "../tools/say"
+import { tellUser, replySoft, saySoft } from "../tools/say"
+import * as lines from "../chat/lines"
 import { getPlatform, setPlatform } from "../web/platform"
 import { startSleep, cancelSleep, getSleepInfo } from "../voice/sleep"
 import { dropTemp } from "../web/fetchmp3"
 
 function handleTest(msg: Message): Promise<Message> {
   console.log("Test : ", msg)
-  return replySoft(msg, pick(["all good on my end~", "yep, I'm here~", "loud and clear, cutie~"]))
+  return replySoft(msg, lines.testReply())
 }
 
 function handleHelp(msg: Message): void {
@@ -77,7 +78,7 @@ async function handleLeave(msg: Message, guild: Guild | undefined, queue: Queue 
     queue.reactionCollector = null
   }
 
-  await tellUser(msg, queue, pick(["leaving the voice channel~ bye for now", "slipping out~ call me when you need me"]))
+  await tellUser(msg, queue, lines.leaving())
   queue.songs = []
   try { queue.player.removeAllListeners(AudioPlayerStatus.Idle) } catch {}
   queue.player.stop()
@@ -214,7 +215,7 @@ async function handleSync(msg: Message, args: string[], guild: Guild, voice: Voi
       queue.userId = msg.author.id
     }
 
-    await tellUser(msg, queue, pick(["synced~ I'm with you now", "found you~ I'm right here"]))
+    await tellUser(msg, queue, lines.synced())
 
     if (queue.radioUrl && queue.radioName && !queue.radioStopped) {
       playStation(guild, queue.radioUrl, queue.radioName)
@@ -344,10 +345,7 @@ async function handleProxySet(msg: Message, args: string[]): Promise<void> {
   const want = (args[0] || "").toLowerCase()
   if (!want) {
     const cur = getPlatform()
-    await replySoft(msg, pick([
-      `we're on **${cur}** right now~ say @Mikka proxyset spotify or youtube to switch`,
-      `current platform: **${cur}**~ want spotify or youtube?`,
-    ]))
+    await replySoft(msg, lines.proxyQuery(cur))
     return
   }
   if (want !== "spotify" && want !== "youtube") {
@@ -355,11 +353,7 @@ async function handleProxySet(msg: Message, args: string[]): Promise<void> {
     return
   }
   setPlatform(want)
-  await replySoft(msg, pick([
-    `switched to **${want}**~ fresh vibes incoming`,
-    `**${want}** it is~ let's go`,
-    `platform set to **${want}**~ play something!`,
-  ]))
+  await replySoft(msg, lines.proxySet(want))
 }
 
 async function handleSleep(msg: Message, args: string[], guild: Guild | undefined, queue: Queue | undefined): Promise<void> {
@@ -380,7 +374,7 @@ async function handleSleep(msg: Message, args: string[], guild: Guild | undefine
   }
   if (arg === "off" || arg === "cancel" || arg === "stop") {
     if (cancelSleep(guild.id)) {
-      await replySoft(msg, pick(["sleep timer off~ wide awake now", "cancelled~ no sleepy time"]))
+      await replySoft(msg, lines.sleepOff())
     } else {
       await replySoft(msg, "there was no sleep timer running~")
     }
@@ -400,40 +394,23 @@ async function handleSleep(msg: Message, args: string[], guild: Guild | undefine
     dropTemp(queue)
     queue.songs = []
     queue.playing = false
-    const goodnight = pick([
-      "goodnight~ sleep tight, dream sweet",
-      "shhh~ off to dreamland you go",
-      "night night~ I'll be here when you wake up",
-      "sweet dreams~ the music fades, you drift away",
-    ])
+    const goodnight = lines.goodnight()
     await tellUser(msg, queue, goodnight)
     markIntentionalLeave(guild.id)
     try { queue.connection?.destroy() } catch {}
     queues.delete(guild.id)
     saveState()
   })
-  await replySoft(msg, pick([
-    `sleep timer set for **${minutes}** min~ I'll fade out gently and say goodnight`,
-    `**${minutes}** minutes till dreamland~ volume fading slowly`,
-    `got it~ **${minutes}** min, then I tuck you in`,
-  ]))
+  await replySoft(msg, lines.sleepSet(minutes))
 }
 
 async function handleStay(msg: Message): Promise<void> {
   const on = !isStayMode()
   setStayMode(on)
   if (on) {
-    await replySoft(msg, pick([
-      "stay mode **on**~ I'll hold this channel even if you wander off",
-      "got it~ I'm not going anywhere now, stay mode **on**",
-      "**staying** put~ leave whenever, I'll keep the music going",
-    ]))
+    await replySoft(msg, lines.stayOn())
   } else {
-    await replySoft(msg, pick([
-      "stay mode **off**~ I'll follow you like always now",
-      "back to normal~ I'll leave with you from now on",
-      "stay mode **off**~ attached to you again",
-    ]))
+    await replySoft(msg, lines.stayOff())
   }
 }
 

@@ -5,7 +5,8 @@ import fs from "fs"
 import config from "../setup"
 import { queues, saveState } from "./shelf"
 import { Song, Processes } from "../types"
-import { tellChannel, pick } from "../tools/say"
+import { tellChannel } from "../tools/say"
+import * as lines from "../chat/lines"
 import { logline, logerr } from "../tools/log"
 import { formatDuration } from "../tools/timefmt"
 import { dropTemp } from "../web/fetchmp3"
@@ -343,7 +344,7 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
   const pre = queue.preloaded
   const _wasPre = !!(pre && pre.songUrl === song.url)
   if (!_wasPre) {
-    await tellChannel(queue, pick([`fetching **${song.title}** for you~ one sec`, `on it~ grabbing **${song.title}**`, `let me get **${song.title}** ready~`]))
+    await tellChannel(queue, lines.fetching(song.title))
   }
   let audio: StreamWithProcesses | null = null
   const wasPreloaded = !!(pre && pre.songUrl === song.url)
@@ -498,7 +499,7 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
     : song.duration
       ? ` [${Math.floor(song.duration / 60)}:${(song.duration % 60).toString().padStart(2, "0")}]`
       : ""
-  await tellChannel(queue, pick([`now spinning **${song.title}**${durStr}~ this one's for you`, `**${song.title}**${durStr}~ sing along with me`, `ooh I love this one~ **${song.title}**${durStr}`]))
+  await tellChannel(queue, lines.nowPlaying(song.title, durStr))
   saveState()
 
   if (queue._saveInterval) clearInterval(queue._saveInterval)

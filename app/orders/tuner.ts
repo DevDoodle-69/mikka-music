@@ -4,7 +4,8 @@ import { queues, saveState, createDefaultQueue, isConnectionLive, leaveAllVoiceS
 import { playStation } from "../voice/jukebox"
 import { resolveRadioMetadata } from "../web/airwaves"
 import { Queue } from "../types"
-import { tellUser, pick } from "../tools/say"
+import { tellUser } from "../tools/say"
+import * as lines from "../chat/lines"
 import { dropTemp } from "../web/fetchmp3"
 
 async function handleRadio(msg: Message, args: string[], guild: Guild, voice: VoiceChannel | null, queue: Queue | undefined): Promise<void> {
@@ -16,7 +17,7 @@ async function handleRadio(msg: Message, args: string[], guild: Guild, voice: Vo
   }
 
   try {
-    await tellUser(msg, queue, pick(["hunting for that station~", "let me find that station for you~"]))
+    await tellUser(msg, queue, lines.radioHunt())
 
     const radio = await resolveRadioMetadata(query)
 

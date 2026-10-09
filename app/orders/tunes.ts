@@ -9,7 +9,8 @@ import { findTrack, linkTrack, v3Playlist } from "../web/tube"
 import { formatDuration } from "../tools/timefmt"
 import config from "../setup"
 import { Queue, PlaylistVideoEntry, Song } from "../types"
-import { tellUser, stripEmojis, pick } from "../tools/say"
+import { tellUser, stripEmojis } from "../tools/say"
+import * as lines from "../chat/lines"
 import { dropTemp } from "../web/fetchmp3"
 import { watchConnection } from "../voice/watchdog"
 import { searchSpotify, findOnSpotify, resolveSpotifyPlaylist } from "../web/spotify"
@@ -138,7 +139,7 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
       }
     }
 
-    await tellUser(msg, queue, `added **${songs.length}** songs to our little queue~`)
+    await tellUser(msg, queue, lines.bulkAdded(songs.length))
 
   } else if (query.startsWith("http")) {
     const parts = query.split(" ")
@@ -175,7 +176,7 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
         songs = songs.slice(0, limit)
         await tellUser(msg, queue, `added **${songs.length}** songs~ kept it to ${limit} like you asked`)
       } else {
-        await tellUser(msg, queue, `added **${songs.length}** songs from the playlist~ enjoy`)
+        await tellUser(msg, queue, lines.playlistUnwrapped(songs.length))
       }
     } else {
       try {
@@ -190,7 +191,7 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
           for (const t of tracks) {
             songs.push({ title: t.name, url: t.url, platform: "spotify" })
           }
-          await tellUser(msg, queue, `unwrapped **${tracks.length}** songs from that playlist~ enjoy`)
+          await tellUser(msg, queue, lines.playlistUnwrapped(tracks.length))
         } else if (/open\.spotify\.com\/(track|episode)/.test(url)) {
           // Spotify link: search it to get clean metadata, play via Spotify.
           const m = url.match(/open\.spotify\.com\/(?:track|episode)\/([A-Za-z0-9]+)/)
@@ -208,7 +209,7 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
             durationFormatted: songData.durationFormatted
           })
         }
-        await tellUser(msg, queue, pick([`added **${songs[0].title}** just for you~`, `ooh, good taste~ **${songs[0].title}** is in the queue`, `**${songs[0].title}**~ coming right up`]))
+        await tellUser(msg, queue, lines.songAdded(songs[0].title))
       } catch (error) {
         console.error("Error fetching single URL:", error)
         await tellUser(msg, queue, "couldn't open that link~ is it valid?")
@@ -232,7 +233,7 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
           durationFormatted: songData.durationFormatted
         })
       }
-      await tellUser(msg, queue, pick([`added **${songs[0].title}** just for you~`, `ooh, good taste~ **${songs[0].title}** is in the queue`, `**${songs[0].title}**~ coming right up`]))
+      await tellUser(msg, queue, lines.songAdded(songs[0].title))
     } catch (error) {
       console.error("Error searching for song:", error)
       await tellUser(msg, queue, `couldn't find anything for "${query}"~ try another name?`)
@@ -329,7 +330,7 @@ async function handleSkip(msg: Message, queue: Queue | undefined): Promise<void>
     }
     queue.player.stop()
     saveState()
-    await tellUser(msg, queue, pick(["skipped~ next one!", "okay~ next song", "poof~ gone, playing the next"]))
+    await tellUser(msg, queue, lines.skipped())
   }
 }
 
@@ -340,7 +341,7 @@ async function handleLoop(msg: Message, queue: Queue | undefined): Promise<void>
   }
   queue.loopMode = ((queue.loopMode || 0) + 1) % 3
   const modes = ["Off", "Single", "All"]
-  await tellUser(msg, queue, `loop is now **${modes[queue.loopMode]}**~`)
+  await tellUser(msg, queue, lines.loopMode(modes[queue.loopMode]))
   saveState()
 }
 
@@ -356,7 +357,7 @@ async function handleShuffle(msg: Message, queue: Queue | undefined): Promise<vo
     [queue.songs[i], queue.songs[j]] = [queue.songs[j], queue.songs[i]]
   }
   if (playing) queue.songs.unshift(playing)
-  await tellUser(msg, queue, "shuffled~ let's see what fate picks")
+  await tellUser(msg, queue, lines.shuffled())
   saveState()
 }
 
@@ -439,7 +440,7 @@ async function handleStop(msg: Message, queue: Queue | undefined): Promise<void>
   queue.songs = []
   queue.player.stop()
   saveState()
-  await tellUser(msg, queue, "stopped~ the stage is yours again")
+  await tellUser(msg, queue, lines.stopped())
 }
 
 async function handleVolume(msg: Message, args: string[], queue: Queue | undefined): Promise<void> {
@@ -469,7 +470,7 @@ async function handleVolume(msg: Message, args: string[], queue: Queue | undefin
   }
 
   saveState()
-  await tellUser(msg, queue, `volume set to **${Math.round(vol * 100)}%**~`)
+  await tellUser(msg, queue, lines.volumeSet(Math.round(vol * 100)))
 }
 
 export {
