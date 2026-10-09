@@ -59,49 +59,37 @@ async function saySoft(channel: { send: (c: string) => Promise<any>; sendTyping?
 }
 
 /**
- * Reply to the owner via DM only. If the command came from a server channel,
- * the response still goes to the inbox — never back to the server.
+ * Reply where the command came from:
+ * - Server channel → reply in that channel
+ * - Inbox/DM → reply in the DM
  */
 async function tellUser(msg: Message, queue: Queue | undefined | null, content: string): Promise<void> {
   const clean = stripEmojis(content)
-  // Always prefer DM (inbox-only mode).
+  await typeAndWait(msg.channel as any, clean)
   try {
-    const dm = await msg.author.createDM()
-    await typeAndWait(dm as any, clean)
-    await dm.send(clean)
-    return
+    await msg.channel.send(clean)
   } catch (err) {
-    logDMFallback(clean, err)
+    try { console.log(`[tellUser] send failed: ${(err as any)?.message?.slice(0, 60)}`) } catch {}
   }
-  // DM failed — stay silent rather than posting in a server.
 }
 
 /**
- * Send a message to the owner's inbox (DM) ONLY — never to a server channel.
- * Music still plays in voice; only the text goes private.
+ * Send to wherever the owner is controlling from:
+ * - Command from server channel → reply in that server channel
+ * - Command from inbox/DM → reply in the inbox
+ * The queue's textChannel always tracks the latest control location.
  */
 async function tellChannel(queue: Queue | undefined | null, content: string): Promise<any> {
   const ch = queue?.textChannel as any
+  if (!ch || typeof ch.send !== "function") return
   const clean = stripEmojis(content)
-  const userId = queue?.userId
-
-  if (userId && ch?.client) {
-    try {
-      const user = await ch.client.users.fetch(userId)
-      const dm = await user.createDM()
-      await typeAndWait(dm as any, clean)
-      return await dm.send(clean)
-    } catch (err) {
-      logDMFallback(clean, err)
-    }
-  }
-  // No DM available — stay silent rather than leaking into a server.
-}
-
-function logDMFallback(content: string, err: any): void {
+  await typeAndWait(ch as any, clean)
   try {
-    console.log(`[dm-fallback] couldn't DM owner, message withheld: "${content.slice(0, 60)}" (${(err?.message || err)?.toString().slice(0, 60)})`)
-  } catch {}
+    return await ch.send(clean)
+  } catch (err) {
+    // Channel may be deleted or inaccessible — log and move on.
+    try { console.log(`[tellChannel] send failed: ${(err as any)?.message?.slice(0, 60)}`) } catch {}
+  }
 }
 
 export { stripEmojis, pick, replySoft, saySoft, tellUser, tellChannel }

@@ -122,12 +122,8 @@ async function enqueueAndPlay(msg: Message, guild: Guild, voice: VoiceChannel | 
     connection.subscribe(player)
     watchConnection(guild, queue)
 
-    const playbackChannel = (msg.channel as any).guild
-      ? msg.channel
-      : (voice.guild.systemChannel || voice.guild.channels.cache.find(c => {
-          const ch = c as any
-          return ch.isTextBased && ch.type === 0
-        }) || voice.guild.channels.cache.first())
+    // Context-aware: DM commands → messages go to DM; server commands → server channel.
+    const playbackChannel = (msg.channel as any).guild ? msg.channel : msg.channel
 
     if (!queue) {
       queue = createDefaultQueue({
@@ -147,6 +143,13 @@ async function enqueueAndPlay(msg: Message, guild: Guild, voice: VoiceChannel | 
       queue.textChannel = playbackChannel as any
       queue.userId = msg.author.id
     }
+  }
+
+  // Always track the latest control location: if the user now commands from
+  // DM, future messages go to DM; if from a server, they go there.
+  if (queue && queue.textChannel !== msg.channel) {
+    queue.textChannel = msg.channel as any
+    queue.userId = msg.author.id
   }
 
   if (queue.radioFfmpeg) {
