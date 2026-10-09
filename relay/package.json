@@ -1,0 +1,1 @@
+{"dependencies":{"express":"^4.19.2"},"description":"Express API gateway relaying music API requests past datacenter IP blocks","engines":{"node":">=18"},"main":"relay.js","name":"mikka-relay","scripts":{"start":"node relay.js"},"version":"1.0.0"}
