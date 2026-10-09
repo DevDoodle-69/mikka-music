@@ -80,6 +80,7 @@ export interface Queue {
   currentTempFile?: string | null
   /** Background pre-download: next song's file, ready for zero-gap switch. */
   preloaded?: { songUrl: string; tempFile: string; title: string; thumbnail?: string } | null
+  songWatchdog?: NodeJS.Timeout
   predownloadTimer?: NodeJS.Timeout
   fadeoutTimer?: NodeJS.Timeout
   fadeTimer?: NodeJS.Timeout

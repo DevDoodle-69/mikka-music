@@ -18,6 +18,8 @@ export interface SpotifyTrack {
   /** Spotify CDN artwork (largest available). */
   image: string
   artist?: string
+  duration?: number
+  durationFormatted?: string
 }
 
 export interface SpotifyDownload {
@@ -201,6 +203,11 @@ export async function resolveSpotifyPlaylist(spotifyUrl: string): Promise<Spotif
       name: subtitle ? `${title} - ${subtitle}` : title,
       url: `https://open.spotify.com/track/${tid}`,
       image: "",
+      // Embed gives duration in ms; store seconds for fade/predownload timing.
+      duration: t?.duration ? Math.floor(t.duration / 1000) : 0,
+      durationFormatted: t?.duration
+        ? `${Math.floor(t.duration / 60000)}:${String(Math.floor((t.duration % 60000) / 1000)).padStart(2, "0")}`
+        : "",
     })
   }
   logline("tube", `spotify ${kind}: ${tracks.length} tracks`)

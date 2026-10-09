@@ -115,11 +115,11 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
           songs.push({ title: fname.replace(/\.(mp3|m4a|ogg|oga|wav|flac|opus|aac)$/i, ""), url, platform: "direct" })
         } else if (/open\.spotify\.com\/(playlist|album)/.test(url)) {
           const tracks = await resolveSpotifyPlaylist(url)
-          for (const t of tracks) songs.push({ title: t.name, url: t.url, platform: "spotify" })
+          for (const t of tracks) songs.push({ title: t.name, url: t.url, platform: "spotify", duration: t.duration || 0, durationFormatted: t.durationFormatted || "" })
         } else if (/open\.spotify\.com\/(track|episode)/.test(url)) {
           const m = url.match(/open\.spotify\.com\/(?:track|episode)\/([A-Za-z0-9]+)/)
           const tracks = await searchSpotify(m ? m[1] : url, 1)
-          if (tracks[0]) songs.push({ title: tracks[0].name, url: tracks[0].url, thumbnail: tracks[0].image, platform: "spotify" })
+          if (tracks[0]) songs.push({ title: tracks[0].name, url: tracks[0].url, thumbnail: tracks[0].image, platform: "spotify", duration: tracks[0].duration || 0, durationFormatted: tracks[0].durationFormatted || "" })
         } else if (url.includes("list=")) {
           await tellUser(msg, queue, "ooh, a playlist~ let me unwrap it for you")
           const playlistSongs = await resolvePlaylist(url)
@@ -202,7 +202,7 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
           // Spotify playlist/album: unwrap via embed page, queue each track.
           const tracks = await resolveSpotifyPlaylist(url)
           for (const t of tracks) {
-            songs.push({ title: t.name, url: t.url, platform: "spotify" })
+            songs.push({ title: t.name, url: t.url, platform: "spotify", duration: t.duration || 0, durationFormatted: t.durationFormatted || "" })
           }
           await tellUser(msg, queue, lines.playlistUnwrapped(tracks.length))
         } else if (/open\.spotify\.com\/(track|episode)/.test(url)) {
@@ -211,7 +211,7 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
           const tracks = await searchSpotify(m ? m[1] : url, 1)
           const t = tracks[0]
           if (!t) throw new Error("spotify track not found")
-          songs.push({ title: t.name, url: t.url, thumbnail: t.image, platform: "spotify" })
+          songs.push({ title: t.name, url: t.url, thumbnail: t.image, platform: "spotify", duration: t.duration || 0, durationFormatted: t.durationFormatted || "" })
         } else {
           // Direct links bypass yt-dlp entirely (no YouTube bot wall)
           const songData = await linkTrack(url)
@@ -236,7 +236,7 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
         const tracks = await searchSpotify(query, 1)
         if (tracks.length === 0) throw new Error("no spotify results")
         const t = tracks[0]
-        songs.push({ title: t.name, url: t.url, thumbnail: t.image, platform: "spotify" })
+        songs.push({ title: t.name, url: t.url, thumbnail: t.image, platform: "spotify", duration: t.duration || 0, durationFormatted: t.durationFormatted || "" })
       } else {
         const songData = await findTrack(query)
         songs.push({
