@@ -44,6 +44,53 @@ export interface SnowpingTrack {
 }
 
 /**
+ * Fallback: resolve YouTube audio via the Invidious API (no key needed).
+ * Returns a direct googlevideo audio URL (expires in ~6h, use promptly).
+ */
+async function resolveViaInvidious(youtubeUrl: string): Promise<SnowpingTrack> {
+  const m = youtubeUrl.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([A-Za-z0-9_-]{11})/)
+  if (!m) throw new Error("invidious: could not parse video ID")
+  const videoId = m[1]
+  await paceHost("invidious.f5.si")
+  const apiUrl = `https://invidious.f5.si/api/v1/videos/${videoId}?fields=title,adaptiveFormats`
+  logline("mp3", "trying invidious fallback")
+
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 20000)
+  let json: any
+  try {
+    const res = await fetch(apiUrl, {
+      signal: ctrl.signal,
+      headers: { "User-Agent": nextUserAgent() },
+    })
+    clearTimeout(timer)
+    if (!res.ok) throw new Error(`invidious HTTP ${res.status}`)
+    json = await res.json()
+  } catch (err: any) {
+    clearTimeout(timer)
+    throw new Error(`invidious failed: ${(err.message || err).slice(0, 100)}`)
+  }
+
+  const formats: any[] = json?.adaptiveFormats || []
+  const bitrateOf = (f: any) => parseInt(String(f?.bitrate || "0"), 10) || 0
+  const audio = formats
+    .filter((f) => f?.type?.startsWith("audio/") && f?.url)
+    .sort((a, b) => bitrateOf(b) - bitrateOf(a))
+  if (audio.length === 0) throw new Error("invidious: no audio formats found")
+
+  const best = audio[0]
+  logline("mp3", `invidious resolved :: "${(json.title || "").slice(0, 50)}" (${Math.round(bitrateOf(best) / 1000)}k)`)
+  return {
+    title: json.title || "Unknown title",
+    duration: "",
+    thumbnail: "",
+    videoUrl: youtubeUrl,
+    streamUrl: best.url,
+    size: "",
+  }
+}
+
+/**
  * Resolve a YouTube URL to a direct MP3 stream URL.
  * Throws on API error or unexpected response shape.
  */
@@ -84,7 +131,15 @@ export async function resolveStream(youtubeUrl: string, timeoutMs = 45000): Prom
       await new Promise((r) => setTimeout(r, isRateLimit ? 10000 * attempt : 2000 * attempt))
     }
   }
-  if (!res) throw new Error(`snowping API failed after 3 tries: ${lastErr?.message?.slice(0, 120) || lastErr}`)
+  if (!res) {
+    // Snowping blocked/failed — try Invidious before giving up.
+    logerr("mp3", "snowping blocked, trying invidious fallback")
+    try {
+      return await resolveViaInvidious(youtubeUrl)
+    } catch (invErr: any) {
+      throw new Error(`all resolvers failed (snowping: ${lastErr?.message?.slice(0, 60)}; invidious: ${(invErr.message || invErr).slice(0, 60)})`)
+    }
+  }
 
   let json: any
   try {
