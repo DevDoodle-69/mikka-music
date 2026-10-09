@@ -7,6 +7,7 @@
  * straight into voice — no temp file download required.
  */
 import { logline, logerr } from "../tools/log"
+import { nextUserAgent, paceHost, browserHeaders } from "./identity"
 
 /** In-memory cache for API resolves: url -> { data, expires }. */
 const resolveCache = new Map<string, { data: SnowpingTrack; expires: number }>()
@@ -51,6 +52,7 @@ export async function resolveStream(youtubeUrl: string, timeoutMs = 45000): Prom
   if (cached) return cached
   const apiUrl = `${API_BASE}?url=${encodeURIComponent(youtubeUrl)}&format=mp3`
   logline("mp3", "resolving direct stream")
+  await paceHost("api.snowping.cfd")
 
   let res: any = null
   let lastErr: any = null
@@ -60,7 +62,7 @@ export async function resolveStream(youtubeUrl: string, timeoutMs = 45000): Prom
     try {
       res = await fetch(apiUrl, {
         signal: ctrl.signal,
-        headers: { "User-Agent": "mikka-music/1.0" },
+        headers: { "User-Agent": nextUserAgent() },
       })
       clearTimeout(timer)
       if (res.ok) break
@@ -125,7 +127,6 @@ export async function downloadSnowpingMp3(streamUrl: string, timeoutMs = 120000)
   const tmp = path.join(os.tmpdir(), `mikka-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp3`)
   logline("mp3", "downloading mp3 file…")
 
-  const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
   // Retry loop: Render's network can hiccup; don't give up on one failure.
   let res: any = null
   let lastErr: any = null
@@ -136,11 +137,7 @@ export async function downloadSnowpingMp3(streamUrl: string, timeoutMs = 120000)
       logline("mp3", `download attempt ${attempt}/3`)
       res = await fetch(streamUrl, {
         signal: ctrl.signal,
-        headers: {
-          "User-Agent": BROWSER_UA,
-          "Accept": "audio/mpeg,audio/*;q=0.9,*/*;q=0.1",
-          "Referer": "https://api.snowping.cfd/",
-        },
+        headers: browserHeaders("https://api.snowping.cfd/"),
       })
       clearTimeout(timer)
       if (res.ok) break

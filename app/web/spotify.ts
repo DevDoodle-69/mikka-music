@@ -6,6 +6,7 @@
  *             -> result.download_url (direct audio file)
  */
 import { logline, logerr } from "../tools/log"
+import { nextUserAgent, paceHost } from "./identity"
 
 const SEARCH_BASE = "https://api.snowping.cfd/api/search/spotify"
 const DL_BASE = "https://api.snowping.cfd/api/downloader/spotify"
@@ -27,6 +28,7 @@ export interface SpotifyDownload {
 }
 
 async function getJson(url: string, timeoutMs = 30000, retries = 3): Promise<any> {
+  await paceHost("api.snowping.cfd")
   let lastErr: any = null
   for (let attempt = 1; attempt <= retries; attempt++) {
     const ctrl = new AbortController()
@@ -34,7 +36,7 @@ async function getJson(url: string, timeoutMs = 30000, retries = 3): Promise<any
     try {
       const res = await fetch(url, {
         signal: ctrl.signal,
-        headers: { "User-Agent": "mikka-music/1.0" },
+        headers: { "User-Agent": nextUserAgent() },
       })
       clearTimeout(timer)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -157,7 +159,7 @@ export async function resolveSpotifyPlaylist(spotifyUrl: string): Promise<Spotif
     const res = await fetch(embedUrl, {
       signal: ctrl.signal,
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "User-Agent": nextUserAgent(),
       },
     })
     clearTimeout(timer)
