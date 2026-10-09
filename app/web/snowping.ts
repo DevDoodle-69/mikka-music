@@ -209,7 +209,11 @@ export async function downloadSnowpingMp3(streamUrl: string, timeoutMs = 120000)
     if (attempt < 3) await new Promise((r) => setTimeout(r, 2000 * attempt))
   }
   if (!res) {
-    throw new Error(`mp3 download failed after 3 tries: ${lastErr?.message?.slice(0, 120) || lastErr}`)
+    const msg = lastErr?.message?.slice(0, 120) || String(lastErr)
+    const hint = /403/.test(msg)
+      ? " (IP blocked — try @Mikka proxy next, or set PROXY_LIST)"
+      : ""
+    throw new Error(`mp3 download failed after 3 tries: ${msg}${hint}`)
   }
   const ct = res.headers.get("content-type") || ""
   if (ct.includes("text/html")) {
@@ -217,7 +221,28 @@ export async function downloadSnowpingMp3(streamUrl: string, timeoutMs = 120000)
   }
   try {
     const out = fs.createWriteStream(tmp)
-    await pipeline(res.body as any, out)
+    // Stall detection: abort if no bytes arrive for 30s (dead connection).
+    let lastBytes = 0
+    let lastProgress = Date.now()
+    const body = res.body as any
+    if (body && typeof body.on === "function") {
+      body.on("data", (chunk: any) => {
+        lastBytes += chunk.length
+        lastProgress = Date.now()
+      })
+    }
+    const stallCheck = setInterval(() => {
+      if (Date.now() - lastProgress > 30000) {
+        logerr("mp3", `download stalled at ${lastBytes} bytes — aborting`)
+        try { body.destroy(new Error("download stalled")) } catch {}
+      }
+    }, 5000)
+    try {
+      await pipeline(body, out)
+    } finally {
+      clearInterval(stallCheck)
+    }
+    logline("mp3", `downloaded ${(lastBytes / 1024).toFixed(0)}KB`)
   } catch (err: any) {
     try { fs.unlinkSync(tmp) } catch {}
     throw new Error(`mp3 download failed mid-stream: ${err.message?.slice(0, 100) || err}`)

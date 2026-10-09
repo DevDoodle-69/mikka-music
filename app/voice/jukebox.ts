@@ -226,66 +226,26 @@ function fadeVolume(queue: any, from: number, to: number, ms: number, persist = 
   return timer
 }
 
-/** Clear any pending pre-download / fade timers for a queue. */
+/** Clear any pending fade / watchdog timers for a queue. */
 export function clearSongTimers(queue: any): void {
   if (queue.songWatchdog) { clearTimeout(queue.songWatchdog); queue.songWatchdog = undefined }
-  if (queue.predownloadTimer) { clearTimeout(queue.predownloadTimer); queue.predownloadTimer = undefined }
   if (queue.fadeoutTimer) { clearTimeout(queue.fadeoutTimer); queue.fadeoutTimer = undefined }
   if (queue.fadeTimer) { clearInterval(queue.fadeTimer); queue.fadeTimer = undefined }
-  // Drop a preloaded file that will never be used.
-  if (queue.preloaded) {
-    try { fs.unlinkSync(queue.preloaded.tempFile) } catch {}
-    queue.preloaded = null
-  }
 }
 
 /**
- * While a song plays: 60s before it ends, download the next song in the
- * background; 6s before it ends, fade the volume out. When the song ends,
- * the next one starts instantly from the preloaded file with a fade-in.
- * No gaps, no silence — DJ-style.
+ * While a song plays: 6s before it ends, fade the volume out over 5s
+ * for a smooth DJ-style transition into the next song.
  */
-function scheduleNextSongPrep(guild: any, queue: any, song: Song): void {
+function scheduleFadeOut(guild: any, queue: any, song: Song): void {
   clearSongTimers(queue)
-  const next = queue.songs[1]
   const duration = song.duration
-  if (!next || !duration || duration < 30) return
-
+  if (!duration || duration < 15) return
   const targetVol = queue.volume ?? 1.0
-
-  // 1) Pre-download the next song 60s before this one ends
-  //    (short songs: start almost immediately so it's ready in time).
-  //    Retries once more halfway through if the first attempt fails.
-  const preMs = duration > 75 ? (duration - 60) * 1000 : 5_000
-  const doPredownload = async (isRetry: boolean) => {
-    // Still the same song playing? (Skip/stop clears the timer anyway.)
-    if (queue.songs[0] !== song || queue.preloaded) return
-    try {
-      logline("music", `pre-downloading next: "${next.title}"${isRetry ? " (retry)" : ""}`)
-      const tmpPath = await fetchSongFile(next)
-      // Song changed while downloading — drop it.
-      if (queue.songs[0] !== song || queue.songs[1] !== next) {
-        try { fs.unlinkSync(tmpPath) } catch {}
-        return
-      }
-      queue.preloaded = { songUrl: next.url, tempFile: tmpPath, title: next.title, thumbnail: next.thumbnail }
-      logline("music", `preloaded "${next.title}" — ready for zero-gap switch`)
-    } catch (err) {
-      logerr("music", "pre-download failed:", (err as Error).message?.slice(0, 100))
-      if (!isRetry) {
-        // One more try halfway through the remaining time.
-        const retryIn = Math.max(5_000, (duration * 1000 - preMs) / 2)
-        queue.predownloadTimer = setTimeout(() => doPredownload(true), retryIn)
-      }
-    }
-  }
-  queue.predownloadTimer = setTimeout(() => doPredownload(false), preMs)
-
-  // 2) Fade out 6s before the end, gliding down over 5s.
   const fadeMs = Math.max(1_000, (duration - 6) * 1000)
   queue.fadeoutTimer = setTimeout(() => {
     if (queue.songs[0] !== song) return
-    logline("music", "fading out for crossfade")
+    logline("music", "fading out")
     queue.fadeTimer = fadeVolume(queue, targetVol, 0, 5000, false)
   }, fadeMs)
 }
@@ -349,28 +309,33 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
     delete song.resumeFrom
   }
 
-  // ONLY PATH: snowping API -> download the MP3 to a temp file ->
-  // play the local file in voice (the classic reliable way).
-  // No API keys, no yt-dlp, no other fallbacks.
-  // Preloaded file from the background pre-downloader? Use it instantly — zero gap.
-  const pre = queue.preloaded
-  const _wasPre = !!(pre && pre.songUrl === song.url)
-  if (!_wasPre) {
-    await tellChannel(queue, lines.fetching(song.title))
-  }
+  // Download the MP3 to a temp file -> play the local file in voice.
+  // Simple, reliable, no background pre-downloading.
+  await tellChannel(queue, lines.fetching(song.title))
   let audio: StreamWithProcesses | null = null
-  const wasPreloaded = !!(pre && pre.songUrl === song.url)
-  if (wasPreloaded) {
-    queue.preloaded = null
-    queue.currentTempFile = pre!.tempFile
-    if (pre.title) song.title = pre.title
-    if (pre.thumbnail) song.thumbnail = pre.thumbnail
-    logline("music", `playing "${song.title}" from preloaded file (zero gap)`)
-    probeDuration(pre.tempFile).then((d) => {
-      if (d && queue.songs[0] === song) {
-        song.duration = d
-        // Re-schedule with the true duration for pixel-perfect fade timing.
-        scheduleNextSongPrep(guild, queue, song)
+  try {
+    const tmpPath = await fetchSongFile(song, (m) => tellChannel(queue, m))
+    queue.currentTempFile = tmpPath
+    const realDur = await probeDuration(tmpPath)
+    if (realDur) {
+      if (song.duration && Math.abs(song.duration - realDur) > 3) {
+        logline("music", `duration corrected: ${song.duration}s -> ${realDur}s`)
+      }
+      song.duration = realDur
+    }
+    audio = pipeFile(tmpPath, seekTime)
+    // Schedule the fade-out now that we know the true duration.
+    scheduleFadeOut(guild, queue, song)
+  } catch (err) {
+    const reason = ((err as Error).message || "unknown").slice(0, 120)
+    logerr("music", `fetch failed for "${song.title}":`, reason)
+    await tellChannel(queue, `couldn't fetch **${song.title}** (${reason})~ skipping ahead`)
+    queue.playing = false
+    dropTemp(queue)
+    queue.songs.shift()
+    if (queue.songs.length > 0) playTrack(guild, queue.songs[0])
+    return
+  }
 
   // Song watchdog: if ffmpeg hangs and the song plays way past its duration,
   // force-advance instead of sitting in silence forever.
@@ -382,37 +347,6 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
         try { queue.player.stop() } catch {}
       }
     }, (song.duration + 60) * 1000)
-  }
-      }
-    })
-    audio = pipeFile(pre.tempFile, seekTime)
-  } else {
-    if (pre) {
-      // Stale preload (skip/queue changed) — clean it up.
-      try { fs.unlinkSync(pre.tempFile) } catch {}
-      queue.preloaded = null
-    }
-    try {
-      const tmpPath = await fetchSongFile(song, (m) => tellChannel(queue, m))
-      queue.currentTempFile = tmpPath
-      const realDur = await probeDuration(tmpPath)
-      if (realDur) {
-        if (song.duration && Math.abs(song.duration - realDur) > 3) {
-          logline("music", `duration corrected: ${song.duration}s -> ${realDur}s`)
-        }
-        song.duration = realDur
-      }
-      audio = pipeFile(tmpPath, seekTime)
-    } catch (err) {
-      const reason = ((err as Error).message || "unknown").slice(0, 120)
-      logerr("music", `fetch failed for "${song.title}":`, reason)
-      await tellChannel(queue, `couldn't fetch **${song.title}** (${reason})~ skipping ahead`)
-      queue.playing = false
-      dropTemp(queue)
-      queue.songs.shift()
-      if (queue.songs.length > 0) playTrack(guild, queue.songs[0])
-      return
-    }
   }
 
   // Never play into the void: the voice connection must actually be ready.
@@ -492,19 +426,11 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
 
   queue.player.play(resource)
 
-  // Crossfade in: if we faded the previous song out, rise back up smoothly.
+  // Fade in: rise smoothly from 0. Also restores volume in case the
+  // previous song's fade-out left it at 0.
   const targetVol = queue.volume ?? 1.0
-  if (wasPreloaded) {
-    setLiveVolume(queue, 0, false)
-    queue.fadeTimer = fadeVolume(queue, 0, targetVol, 2000, true)
-  } else {
-    // Not preloaded: the previous fade-out may have left live volume at 0.
-    // Restore it instantly so the song never starts silent.
-    setLiveVolume(queue, targetVol, true)
-  }
-
-  // DJ mode: pre-download the next song 20s before this ends + fade out.
-  scheduleNextSongPrep(guild, queue, song)
+  setLiveVolume(queue, 0, false)
+  queue.fadeTimer = fadeVolume(queue, 0, targetVol, 2000, true)
 
   // Song watchdog: if ffmpeg hangs and the song plays way past its duration,
   // force-advance instead of sitting in silence forever.

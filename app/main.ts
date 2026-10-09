@@ -50,6 +50,18 @@ process.on("uncaughtException", (err) => console.error("Uncaught exception:", er
 client.on("ready", async () => {
   console.log("✅ Logged in as", client.user!.tag)
 
+  // Clean up stale temp files from crashes/restarts.
+  try {
+    const fs = await import("fs")
+    const os = await import("os")
+    const path = await import("path")
+    const files = fs.readdirSync(os.tmpdir()).filter((f) => f.startsWith("mikka-") && f.endsWith(".mp3"))
+    for (const f of files) {
+      try { fs.unlinkSync(path.join(os.tmpdir(), f)) } catch {}
+    }
+    if (files.length > 0) console.log(`🧹 Cleaned ${files.length} stale temp file(s)`)
+  } catch {}
+
   setPlayTrackFunction(playTrack)
   setPlayStationFunction(playStation)
 
