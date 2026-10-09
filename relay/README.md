@@ -3,10 +3,12 @@
 Bypass datacenter IP blocks by routing the bot's API calls through
 your own server.
 
-## Option A: Railway / Fly.io / Render (easiest)
+## Option A: Railway / Fly.io (easiest)
 
 1. Push this `relay/` folder to a new GitHub repo (or the same one)
-2. Create a new service on Railway/Fly.io/Render from that repo
+2. Create a new service on Railway/Fly.io from that repo
+   (NOT Render — Render shares the same blocked IP range as the bot,
+   so a Render-hosted relay gets the same 403)
 3. Set env var: `UPSTREAM=https://api.snowping.cfd`
 4. Copy the public URL, e.g. `https://mikka-relay.up.railway.app`
 
