@@ -8,6 +8,7 @@
  */
 import { logline, logerr } from "../tools/log"
 import { nextUserAgent, paceHost, browserHeaders } from "./identity"
+import { proxiedFetch } from "./proxy"
 
 /** In-memory cache for API resolves: url -> { data, expires }. */
 const resolveCache = new Map<string, { data: SnowpingTrack; expires: number }>()
@@ -59,7 +60,7 @@ async function resolveViaInvidious(youtubeUrl: string): Promise<SnowpingTrack> {
   const timer = setTimeout(() => ctrl.abort(), 20000)
   let json: any
   try {
-    const res = await fetch(apiUrl, {
+    const res = await proxiedFetch(apiUrl, {
       signal: ctrl.signal,
       headers: { "User-Agent": nextUserAgent() },
     })
@@ -107,7 +108,7 @@ export async function resolveStream(youtubeUrl: string, timeoutMs = 45000): Prom
     const ctrl = new AbortController()
     const timer = setTimeout(() => ctrl.abort(), timeoutMs)
     try {
-      res = await fetch(apiUrl, {
+      res = await proxiedFetch(apiUrl, {
         signal: ctrl.signal,
         headers: { "User-Agent": nextUserAgent() },
       })
@@ -190,7 +191,7 @@ export async function downloadSnowpingMp3(streamUrl: string, timeoutMs = 120000)
     const timer = setTimeout(() => ctrl.abort(), timeoutMs)
     try {
       logline("mp3", `download attempt ${attempt}/3`)
-      res = await fetch(streamUrl, {
+      res = await proxiedFetch(streamUrl, {
         signal: ctrl.signal,
         headers: browserHeaders("https://api.snowping.cfd/"),
       })

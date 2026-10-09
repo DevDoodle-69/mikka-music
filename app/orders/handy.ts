@@ -49,6 +49,7 @@ function handleHelp(msg: Message): void {
     "**proxyset** <youtube|spotify> - switch music platform (auto-fallback included)",
     "tip: direct .mp3 links play too, and songs crossfade with zero gaps~",
     "**stay** - I'll hold the voice channel when you leave (off when you join elsewhere)",
+    "**proxy** [next|on|off] - check or switch my outbound IP",
     "**clearchat** [number] - tidy up messages",
     "",
     "*join a voice channel first, and I'll follow you in (I take about 10 seconds, gotta look cute)~*",
@@ -465,6 +466,53 @@ async function handleDiag(msg: Message): Promise<void> {
   await replySoft(msg, out.join("\n"))
 }
 
+async function handleProxy(msg: Message, args: string[]): Promise<void> {
+  const { proxyCount, isProxyEnabled, currentProxy, nextProxy, setProxyEnabled, checkOutboundIp } =
+    await import("../web/proxy")
+
+  const sub = (args[0] || "").toLowerCase()
+
+  if (sub === "next") {
+    const p = nextProxy()
+    if (!p) {
+      await msg.channel.send("no proxies configured~ set PROXY_LIST on Render first")
+      return
+    }
+    const ip = await checkOutboundIp()
+    await msg.channel.send(`switched IP~ now coming from **${ip}** via ${p.masked}`)
+    return
+  }
+  if (sub === "off") {
+    setProxyEnabled(false)
+    await msg.channel.send("proxy off~ back to direct connection")
+    return
+  }
+  if (sub === "on") {
+    if (proxyCount() === 0) {
+      await msg.channel.send("no proxies configured~ set PROXY_LIST on Render first")
+      return
+    }
+    setProxyEnabled(true)
+    const ip = await checkOutboundIp()
+    await msg.channel.send(`proxy on~ outbound IP is **${ip}**`)
+    return
+  }
+  // Status
+  const count = proxyCount()
+  if (count === 0) {
+    await msg.channel.send("no proxies set~ add PROXY_LIST in Render env vars to enable IP switching")
+    return
+  }
+  const cur = currentProxy()
+  const ip = await checkOutboundIp()
+  await msg.channel.send(
+    `proxy **${isProxyEnabled() ? "ON" : "OFF"}** — ${count} configured\n` +
+    `current: ${cur?.masked || "none"}\n` +
+    `outbound IP: **${ip}**\n` +
+    `use \`proxy next\` to switch IP, \`proxy off\` to go direct`
+  )
+}
+
 export {
   handleTest,
   handleHelp,
@@ -478,5 +526,6 @@ export {
   handleProxySet,
   handleSleep,
   handleStay,
-  handleDiag
+  handleDiag,
+  handleProxy
 }

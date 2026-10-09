@@ -1,4 +1,5 @@
 import { spawn } from "child_process"
+import { proxiedFetch } from "./proxy"
 import fs from "fs"
 import config from "../setup"
 import { YouTubeSearchResult } from "../types"
@@ -14,7 +15,7 @@ function needKey(): string {
 async function v3get(path: string, params: Record<string, string>): Promise<any> {
   const key = needKey()
   const qs = new URLSearchParams({ ...params, key }).toString()
-  const res = await fetch(`${V3}${path}?${qs}`, { signal: AbortSignal.timeout(15000) })
+  const res = await proxiedFetch(`${V3}${path}?${qs}`, { signal: AbortSignal.timeout(15000) })
   if (!res.ok) {
     const body = await res.text().catch(() => "")
     throw new Error(`YouTube API HTTP ${res.status}: ${body.slice(0, 120)}`)
@@ -203,7 +204,7 @@ async function linkTrack(url: string): Promise<YouTubeSearchResult> {
   let title = "YouTube video"
 
   try {
-    const res = await fetch(
+    const res = await proxiedFetch(
       `https://www.youtube.com/oembed?url=${encodeURIComponent(watchUrl)}&format=json`,
       { signal: AbortSignal.timeout(10000) }
     )
