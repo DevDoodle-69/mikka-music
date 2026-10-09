@@ -3,7 +3,7 @@ import { AudioPlayerStatus } from "@discordjs/voice"
 import { Message, Guild, VoiceChannel } from "selfbotsdk-discordjs"
 import config from "../setup"
 import { queues, isConnectionLive, leaveAllVoiceSessions } from "../voice/shelf"
-import { handlePlay, handleSkip, handleLoop, handleShuffle, handleQueue, handleStop, handleVolume } from "./tunes"
+import { handlePlay, handleAiPlay, handleSkip, handleLoop, handleShuffle, handleQueue, handleStop, handleVolume } from "./tunes"
 import { handleRadio, handleRadioStats } from "./tuner"
 import { handleTest, handleHelp, handleLeave, handleClearChat, handleClearReactions, handleSync, handleState, handlePanel, handleSilent, handleProxySet, handleSleep, handleStay, handleDiag, handleProxy } from "./handy"
 import { replySoft, saySoft } from "../tools/say"
@@ -135,6 +135,16 @@ async function handleMessageCreate(msg: Message): Promise<void> {
         await handlePlay(msg, args, guild, voice, queue)
       } catch (error) {
         console.error("Error in handlePlay:", error)
+        try { await saySoft(msg.channel as any, "oopsie, something tripped~ try again?").catch(() => {}) } catch {}
+      }
+      return
+    }
+    case "aiplay": {
+      if (!guild) { await replySoft(msg, "hmm, can't find that server~"); return }
+      try {
+        await handleAiPlay(msg, args, guild, voice, queue)
+      } catch (error) {
+        console.error("Error in handleAiPlay:", error)
         try { await saySoft(msg.channel as any, "oopsie, something tripped~ try again?").catch(() => {}) } catch {}
       }
       return

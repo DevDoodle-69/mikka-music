@@ -53,6 +53,65 @@ function pipeFile(filePath: string, seekTime: number | null = null): StreamWithP
   return outStream
 }
 
+/**
+ * Probe a URL to determine if it's a direct audio file, HLS stream, or
+ * Icecast/Shoutcast stream. Returns the detected type.
+ */
+async function probeUrlType(url: string): Promise<"file" | "hls" | "stream" | "unknown"> {
+  const lower = url.toLowerCase()
+  if (lower.includes(".m3u8")) return "hls"
+  if (/\.(mp3|m4a|ogg|oga|wav|flac|opus|aac)(\?|#|$)/i.test(url)) return "file"
+
+  // No extension — HEAD request to check content-type.
+  try {
+    const { proxiedFetch } = await import("../web/proxy")
+    const res: any = await proxiedFetch(url, { method: "HEAD", signal: AbortSignal.timeout(10000) })
+    const ct = (res.headers.get("content-type") || "").toLowerCase()
+    if (ct.includes("application/vnd.apple.mpegurl") || ct.includes("application/x-mpegurl")) return "hls"
+    if (ct.startsWith("audio/") || ct.includes("octet-stream")) {
+      // Icecast/Shoutcast streams often have icy-* headers or no content-length.
+      const icy = res.headers.get("icy-name") || res.headers.get("ice-audio-info")
+      if (icy || !res.headers.get("content-length")) return "stream"
+      return "file"
+    }
+  } catch {}
+  return "unknown"
+}
+
+/**
+ * Play a streaming URL directly via ffmpeg (no temp file download).
+ * Works for HLS (.m3u8), Icecast, Shoutcast, and other infinite streams.
+ */
+function pipeStream(streamUrl: string): StreamWithProcesses {
+  const ffArgs = [
+    "-reconnect", "1",
+    "-reconnect_streamed", "1",
+    "-reconnect_delay_max", "5",
+    "-i", streamUrl,
+    "-f", "opus",
+    "-ar", "48000",
+    "-ac", "2",
+    "-b:a", "160k",
+    "-vbr", "on",
+    "-compression_level", "10",
+    "-application", "audio",
+    "pipe:1"
+  ]
+  const ff = spawn(config.ffmpeg, ffArgs)
+  ff.stderr!.on("data", (data: Buffer) => {
+    const msg = data.toString()
+    if (!msg.includes("bitrate=")) console.error("ffmpeg stream stderr:", msg.slice(0, 200))
+  })
+  ff.on("error", (err: Error) => { console.error("ffmpeg stream error:", err) })
+  ff.on("close", (code: number | null) => {
+    if (code !== 0 && code !== null) console.error("ffmpeg stream exited with code:", code)
+  })
+
+  const outStream = ff.stdout as unknown as StreamWithProcesses
+  outStream.processes = { ff }
+  return outStream
+}
+
 function fixStreamError(guild: any, song: Song, source: string, error: Error | null = null): void {
   const queue = queues.get(guild.id)
   if (!queue) return
@@ -137,13 +196,31 @@ function fixStreamError(guild: any, song: Song, source: string, error: Error | n
  * title/thumbnail/platform. Returns the temp file path. Throws on failure.
  * Used by playTrack AND the background pre-downloader.
  */
-async function fetchSongFile(song: Song, notify?: (msg: string) => Promise<void>): Promise<string> {
+/**
+ * Result of fetching a song: either a local temp file, or a stream URL
+ * to play directly (for HLS/Icecast/infinite streams).
+ */
+interface FetchedSong {
+  kind: "file" | "stream"
+  path: string  // temp file path OR stream URL
+}
+
+async function fetchSongFile(song: Song, notify?: (msg: string) => Promise<void>): Promise<FetchedSong> {
   const platform = song.platform || getPlatform()
   try {
     if (platform === "direct") {
+      // Universal URL: detect file vs stream, handle each properly.
+      const urlType = await probeUrlType(song.url)
+      if (urlType === "hls" || urlType === "stream") {
+        logline("music", `streaming directly (${urlType}): "${song.title}"`)
+        // Infinite streams have no duration.
+        song.duration = 0
+        return { kind: "stream", path: song.url }
+      }
+      // Regular file (or unknown — try downloading).
       const tmpPath = await downloadSnowpingMp3(song.url)
       logline("music", `fetched direct audio "${song.title}"`)
-      return tmpPath
+      return { kind: "file", path: tmpPath }
     }
     if (platform === "spotify") {
       const dl = await resolveSpotifyDownload(song.url)
@@ -153,7 +230,7 @@ async function fetchSongFile(song: Song, notify?: (msg: string) => Promise<void>
       if (dl.cover) song.thumbnail = dl.cover
       const tmpPath = await downloadSnowpingMp3(dl.downloadUrl)
       logline("music", `fetched "${song.title}" via spotify`)
-      return tmpPath
+      return { kind: "file", path: tmpPath }
     }
     // YouTube path.
     const track = await resolveStream(song.url)
@@ -161,7 +238,7 @@ async function fetchSongFile(song: Song, notify?: (msg: string) => Promise<void>
     if (track.thumbnail) song.thumbnail = track.thumbnail
     const tmpPath = await downloadSnowpingMp3(track.streamUrl)
     logline("music", `fetched "${song.title}" from downloaded file`)
-    return tmpPath
+    return { kind: "file", path: tmpPath }
   } catch (err) {
     const lastError = (err as Error).message || "download failed"
     logerr("music", `${platform} download failed:`, lastError)
@@ -177,7 +254,7 @@ async function fetchSongFile(song: Song, notify?: (msg: string) => Promise<void>
         song.platform = "spotify"
         song.url = alt.url
         logline("music", `fetched "${song.title}" via spotify fallback`)
-        return tmpPath
+        return { kind: "file", path: tmpPath }
       }
     }
     throw err
@@ -311,21 +388,29 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
 
   // Download the MP3 to a temp file -> play the local file in voice.
   // Simple, reliable, no background pre-downloading.
-  await tellChannel(queue, lines.fetching(song.title))
+  await tellChannel(queue, await lines.fetchingFresh(song.title))
   let audio: StreamWithProcesses | null = null
   try {
-    const tmpPath = await fetchSongFile(song, (m) => tellChannel(queue, m))
-    queue.currentTempFile = tmpPath
-    const realDur = await probeDuration(tmpPath)
-    if (realDur) {
-      if (song.duration && Math.abs(song.duration - realDur) > 3) {
-        logline("music", `duration corrected: ${song.duration}s -> ${realDur}s`)
+    const fetched = await fetchSongFile(song, (m) => tellChannel(queue, m))
+    if (fetched.kind === "stream") {
+      // Infinite stream: play directly, no temp file, no duration, no fade-out.
+      queue.currentTempFile = null
+      song.duration = 0
+      audio = pipeStream(fetched.path)
+      logline("music", `streaming "${song.title}" live`)
+    } else {
+      queue.currentTempFile = fetched.path
+      const realDur = await probeDuration(fetched.path)
+      if (realDur) {
+        if (song.duration && Math.abs(song.duration - realDur) > 3) {
+          logline("music", `duration corrected: ${song.duration}s -> ${realDur}s`)
+        }
+        song.duration = realDur
       }
-      song.duration = realDur
+      audio = pipeFile(fetched.path, seekTime)
+      // Schedule the fade-out now that we know the true duration.
+      scheduleFadeOut(guild, queue, song)
     }
-    audio = pipeFile(tmpPath, seekTime)
-    // Schedule the fade-out now that we know the true duration.
-    scheduleFadeOut(guild, queue, song)
   } catch (err) {
     const reason = ((err as Error).message || "unknown").slice(0, 120)
     logerr("music", `fetch failed for "${song.title}":`, reason)
@@ -466,7 +551,7 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
     : song.duration
       ? ` [${Math.floor(song.duration / 60)}:${(song.duration % 60).toString().padStart(2, "0")}]`
       : ""
-  await tellChannel(queue, lines.nowPlaying(song.title, durStr))
+  await tellChannel(queue, await lines.nowPlayingFresh(song.title, durStr))
   saveState()
 
   if (queue._saveInterval) clearInterval(queue._saveInterval)

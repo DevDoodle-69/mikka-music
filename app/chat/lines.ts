@@ -247,3 +247,33 @@ export function loopMode(mode: string): string {
     `loop: **${mode}**~ got it`,
   ])
 }
+
+// --- AI-fresh variants: try the brain for a brand-new line, fall back to static. ---
+import { freshLine } from "../web/brain"
+
+/** AI now-playing line, or static fallback. */
+export async function nowPlayingFresh(title: string, durStr: string): Promise<string> {
+  try {
+    const fresh = await freshLine("nowPlaying", title)
+    if (fresh) return `${fresh} **${title}**${durStr}`
+  } catch {}
+  return nowPlaying(title, durStr)
+}
+
+/** AI song-added line, or static fallback. */
+export async function songAddedFresh(title: string): Promise<string> {
+  try {
+    const fresh = await freshLine("songAdded", title)
+    if (fresh) return fresh
+  } catch {}
+  return songAdded(title)
+}
+
+/** AI fetching line, or static fallback. */
+export async function fetchingFresh(title: string): Promise<string> {
+  try {
+    const fresh = await freshLine("fetching", title)
+    if (fresh) return fresh
+  } catch {}
+  return fetching(title)
+}

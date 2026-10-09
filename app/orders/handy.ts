@@ -32,6 +32,7 @@ function handleHelp(msg: Message): void {
     "**play** <playlist link> [limit] - a whole playlist, your call how many",
     "**play** <playlist link> shuffle - the whole playlist, surprise order",
     "**play** <link1 link2 ...> - several links at once, I'm not shy",
+    "**aiplay** <describe the vibe> [limit] - I pick the songs with AI~",
     "**skip** - next song, no hard feelings",
     "**loop** - round and round: Off / Single / All",
     "**shuffle** - let fate pick the order",

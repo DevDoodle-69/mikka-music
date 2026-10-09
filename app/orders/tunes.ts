@@ -6,6 +6,7 @@ import { Message, Guild, VoiceChannel, MessageAttachment } from "selfbotsdk-disc
 import { queues, saveState, createDefaultQueue, isConnectionLive, leaveAllVoiceSessions } from "../voice/shelf"
 import { playTrack, clearSongTimers } from "../voice/jukebox"
 import { findTrack, linkTrack, v3Playlist } from "../web/tube"
+import { descriptionToQuery, descriptionToPlaylist } from "../web/brain"
 import { formatDuration } from "../tools/timefmt"
 import config from "../setup"
 import { Queue, PlaylistVideoEntry, Song } from "../types"
@@ -92,6 +93,154 @@ async function resolvePlaylist(url: string): Promise<Song[]> {
   return playlistViaYtdlp(url)
 }
 
+/**
+ * Shared tail: join voice if needed, push songs to the queue, start playing.
+ * Used by handlePlay and handleAiPlay.
+ */
+async function enqueueAndPlay(msg: Message, guild: Guild, voice: VoiceChannel | null, queue: Queue | undefined, songs: Song[]): Promise<Queue | undefined> {
+  if (!queue || !isConnectionLive(queue)) {
+    if (!voice) {
+      await tellUser(msg, queue, "join a voice channel first, silly~ I can't sing to an empty room")
+      return
+    }
+    // Tear down any dead connection before (re)joining. Single voice session:
+    // leave every other guild first or Discord yanks sessions and audio dies.
+    // Always start a fresh audio player — a reused one can be stuck "playing"
+    // into the void.
+    leaveAllVoiceSessions(guild.id)
+    try { queue?.connection?.destroy() } catch {}
+    try { queue?.player?.removeAllListeners() } catch {}
+    const connection = joinVoiceChannel({
+      channelId: voice.id,
+      guildId: guild.id,
+      adapterCreator: guild.voiceAdapterCreator,
+      selfDeaf: false,
+      selfMute: false
+    })
+
+    const player = createAudioPlayer()
+    connection.subscribe(player)
+    watchConnection(guild, queue)
+
+    const playbackChannel = (msg.channel as any).guild
+      ? msg.channel
+      : (voice.guild.systemChannel || voice.guild.channels.cache.find(c => {
+          const ch = c as any
+          return ch.isTextBased && ch.type === 0
+        }) || voice.guild.channels.cache.first())
+
+    if (!queue) {
+      queue = createDefaultQueue({
+        textChannel: playbackChannel as any,
+        connection,
+        player,
+        voiceChannelId: voice.id,
+        userId: msg.author.id
+      })
+
+      queues.set(guild.id, queue)
+    } else {
+      // Stale queue shell: revive it in the new voice channel, keep the songs.
+      queue.connection = connection
+      queue.player = player
+      queue.voiceChannelId = voice.id
+      queue.textChannel = playbackChannel as any
+      queue.userId = msg.author.id
+    }
+  }
+
+  if (queue.radioFfmpeg) {
+    queue.radioFfmpeg.kill()
+    queue.radioFfmpeg = null
+  }
+  queue.radioStopped = true
+  queue.playing = false
+  queue.isReconnecting = false
+  queue.isMusicReconnecting = false
+  queue.musicReconnectAttempts = 0
+  queue.musicReconnectMessage = null
+
+  queue.songs.push(...songs)
+  logline("music", `+${songs.length} song(s) → queue total ${queue.songs.length}`)
+  saveState()
+  console.log(`💾 State saved. Queue songs count: ${queue.songs.length}`)
+
+  if (queue.player.state.status === AudioPlayerStatus.Idle) {
+    playTrack(guild, queue.songs[0])
+  }
+  return queue
+}
+
+/**
+ * @Mikka aiplay <description> [limit]
+ * AI-powered play: describe the mood/topic, AI picks the song(s).
+ * e.g. "@Mikka aiplay sad lofi for rainy night"
+ * e.g. "@Mikka aiplay upbeat workout songs 5"
+ */
+async function handleAiPlay(msg: Message, args: string[], guild: Guild, voice: VoiceChannel | null, queue: Queue | undefined): Promise<void> {
+  if (args.length === 0) {
+    await tellUser(msg, queue, "describe what you want to hear~ like @Mikka aiplay chill jazz for sunday morning")
+    return
+  }
+
+  // Last arg might be a limit number.
+  let limit = 1
+  let descArgs = args
+  const lastArg = args[args.length - 1]
+  if (/^\d+$/.test(lastArg) && args.length > 1) {
+    limit = Math.min(Math.max(parseInt(lastArg), 1), 25)
+    descArgs = args.slice(0, -1)
+  }
+  const description = descArgs.join(" ")
+
+  await tellUser(msg, queue, `ooh, let me think about what fits "${description}"~`)
+
+  let songs: Song[] = []
+  try {
+    if (limit === 1) {
+      const query = await descriptionToQuery(description)
+      if (!query) throw new Error("AI couldn't think of a song")
+      await tellUser(msg, queue, `I picked **${query}** for you~`)
+      const songData = await findTrack(query)
+      songs.push({
+        title: songData.title,
+        url: songData.url,
+        duration: songData.duration,
+        durationFormatted: songData.durationFormatted
+      })
+    } else {
+      const queries = await descriptionToPlaylist(description, limit)
+      if (queries.length === 0) throw new Error("AI couldn't build the playlist")
+      await tellUser(msg, queue, `made you a ${queries.length}-song playlist~ hunting them down one by one`)
+      for (const q of queries) {
+        try {
+          const songData = await findTrack(q)
+          songs.push({
+            title: songData.title,
+            url: songData.url,
+            duration: songData.duration,
+            durationFormatted: songData.durationFormatted
+          })
+        } catch {
+          logline("music", `aiplay: couldn't find "${q.slice(0, 40)}", skipping`)
+        }
+      }
+      if (songs.length === 0) throw new Error("couldn't find any of the songs")
+      await tellUser(msg, queue, `found ${songs.length} of them~ enjoy your vibe`)
+    }
+  } catch (err: any) {
+    await tellUser(msg, queue, `hmm, my brain glitched~ ${(err.message || "try again?").slice(0, 80)}`)
+    return
+  }
+
+  if (songs.length === 0) {
+    await tellUser(msg, queue, "couldn't find anything for that vibe~ try describing it differently?")
+    return
+  }
+
+  await enqueueAndPlay(msg, guild, voice, queue, songs)
+}
+
 async function handlePlay(msg: Message, args: string[], guild: Guild, voice: VoiceChannel | null, queue: Queue | undefined): Promise<void> {
   const query = args.join(" ")
 
@@ -110,9 +259,9 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
 
     for (const url of urls) {
       try {
-        if (/\.(mp3|m4a|ogg|oga|wav|flac|opus|aac)(\?|#|$)/i.test(url)) {
+        if (/\.(mp3|m4a|ogg|oga|wav|flac|opus|aac|m3u8)(\?|#|$)/i.test(url) || (/^https?:\/\//i.test(url) && !/youtube\.com|youtu\.be|spotify\.com/i.test(url) && !url.includes("list="))) {
           const fname = decodeURIComponent((url.split("/").pop() || "audio file").split("?")[0])
-          songs.push({ title: fname.replace(/\.(mp3|m4a|ogg|oga|wav|flac|opus|aac)$/i, ""), url, platform: "direct" })
+          songs.push({ title: fname.replace(/\.(mp3|m4a|ogg|oga|wav|flac|opus|aac|m3u8)$/i, ""), url, platform: "direct" })
         } else if (/open\.spotify\.com\/(playlist|album)/.test(url)) {
           const tracks = await resolveSpotifyPlaylist(url)
           for (const t of tracks) songs.push({ title: t.name, url: t.url, platform: "spotify", duration: t.duration || 0, durationFormatted: t.durationFormatted || "" })
@@ -193,10 +342,10 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
       }
     } else {
       try {
-        if (/\.(mp3|m4a|ogg|oga|wav|flac|opus|aac)(\?|#|$)/i.test(url)) {
+        if (/\.(mp3|m4a|ogg|oga|wav|flac|opus|aac|m3u8)(\?|#|$)/i.test(url) || (/^https?:\/\//i.test(url) && !/youtube\.com|youtu\.be|spotify\.com/i.test(url) && !url.includes("list="))) {
           // Direct audio file: download and play, no search needed.
           const fname = decodeURIComponent((url.split("/").pop() || "audio file").split("?")[0])
-          songs.push({ title: fname.replace(/\.(mp3|m4a|ogg|oga|wav|flac|opus|aac)$/i, ""), url, platform: "direct" })
+          songs.push({ title: fname.replace(/\.(mp3|m4a|ogg|oga|wav|flac|opus|aac|m3u8)$/i, ""), url, platform: "direct" })
           await tellUser(msg, queue, `grabbing that audio file for you~`)
         } else if (/open\.spotify\.com\/(playlist|album)/.test(url)) {
           // Spotify playlist/album: unwrap via embed page, queue each track.
@@ -222,7 +371,7 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
             durationFormatted: songData.durationFormatted
           })
         }
-        await tellUser(msg, queue, lines.songAdded(songs[0].title))
+        await tellUser(msg, queue, await lines.songAddedFresh(songs[0].title))
       } catch (error) {
         console.error("Error fetching single URL:", error)
         await tellUser(msg, queue, "couldn't open that link~ is it valid?")
@@ -246,7 +395,7 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
           durationFormatted: songData.durationFormatted
         })
       }
-      await tellUser(msg, queue, lines.songAdded(songs[0].title))
+      await tellUser(msg, queue, await lines.songAddedFresh(songs[0].title))
     } catch (error) {
       console.error("Error searching for song:", error)
       await tellUser(msg, queue, `couldn't find anything for "${query}"~ try another name?`)
@@ -260,77 +409,9 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
     return
   }
 
-  if (!queue || !isConnectionLive(queue)) {
-    if (!voice) {
-      await tellUser(msg, queue, "join a voice channel first, silly~ I can't sing to an empty room")
-      return
-    }
-    // Tear down any dead connection before (re)joining. Single voice session:
-    // leave every other guild first or Discord yanks sessions and audio dies.
-    // Always start a fresh audio player — a reused one can be stuck "playing"
-    // into the void.
-    leaveAllVoiceSessions(guild.id)
-    try { queue?.connection?.destroy() } catch {}
-    try { queue?.player?.removeAllListeners() } catch {}
-    const connection = joinVoiceChannel({
-      channelId: voice.id,
-      guildId: guild.id,
-      adapterCreator: guild.voiceAdapterCreator,
-      selfDeaf: false,
-      selfMute: false
-    })
-
-    const player = createAudioPlayer()
-    connection.subscribe(player)
-    watchConnection(guild, queue)
-
-    const playbackChannel = (msg.channel as any).guild
-      ? msg.channel
-      : (voice.guild.systemChannel || voice.guild.channels.cache.find(c => {
-          const ch = c as any
-          return ch.isTextBased && ch.type === 0
-        }) || voice.guild.channels.cache.first())
-
-    if (!queue) {
-      queue = createDefaultQueue({
-        textChannel: playbackChannel as any,
-        connection,
-        player,
-        voiceChannelId: voice.id,
-        userId: msg.author.id
-      })
-
-      queues.set(guild.id, queue)
-    } else {
-      // Stale queue shell: revive it in the new voice channel, keep the songs.
-      queue.connection = connection
-      queue.player = player
-      queue.voiceChannelId = voice.id
-      queue.textChannel = playbackChannel as any
-      queue.userId = msg.author.id
-    }
-  }
-
-  if (queue.radioFfmpeg) {
-    queue.radioFfmpeg.kill()
-    queue.radioFfmpeg = null
-  }
-  queue.radioStopped = true
-  queue.playing = false
-  queue.isReconnecting = false
-  queue.isMusicReconnecting = false
-  queue.musicReconnectAttempts = 0
-  queue.musicReconnectMessage = null
-
-  queue.songs.push(...songs)
-  logline("music", `+${songs.length} song(s) → queue total ${queue.songs.length}`)
-  saveState()
-  console.log(`💾 State saved. Queue songs count: ${queue.songs.length}`)
-
-  if (queue.player.state.status === AudioPlayerStatus.Idle) {
-    playTrack(guild, queue.songs[0])
-  }
+  await enqueueAndPlay(msg, guild, voice, queue, songs)
 }
+
 
 async function handleSkip(msg: Message, queue: Queue | undefined): Promise<void> {
   if (queue) {
@@ -488,6 +569,7 @@ async function handleVolume(msg: Message, args: string[], queue: Queue | undefin
 
 export {
   handlePlay,
+  handleAiPlay,
   handleSkip,
   handleLoop,
   handleShuffle,
