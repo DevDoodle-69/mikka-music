@@ -8,8 +8,8 @@
 import { logline, logerr } from "../tools/log"
 import { nextUserAgent, paceHost } from "./identity"
 
-const SEARCH_BASE = "https://api.snowping.cfd/api/search/spotify"
-const DL_BASE = "https://api.snowping.cfd/api/downloader/spotify"
+const SEARCH_BASE = process.env.SNOWPING_SEARCH_BASE || "https://api.snowping.cfd/api/search/spotify"
+const DL_BASE = process.env.SNOWPING_SPOTIFY_BASE || "https://api.snowping.cfd/api/downloader/spotify"
 
 export interface SpotifyTrack {
   id: string
