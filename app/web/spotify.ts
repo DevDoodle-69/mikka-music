@@ -43,7 +43,10 @@ async function getJson(url: string, timeoutMs = 30000, retries = 3): Promise<any
       clearTimeout(timer)
       lastErr = err
       logerr("tube", `spotify API attempt ${attempt}:`, (err.message || err).slice(0, 100))
-      if (attempt < retries) await new Promise((r) => setTimeout(r, 2000 * attempt))
+      if (attempt < retries) {
+        const isRateLimit = (lastErr?.message || "").includes("429")
+        await new Promise((r) => setTimeout(r, isRateLimit ? 10000 * attempt : 2000 * attempt))
+      }
     }
   }
   throw lastErr
@@ -80,7 +83,17 @@ export async function searchSpotify(query: string, limit = 5): Promise<SpotifyTr
  * Resolve a Spotify track URL to a direct audio download.
  * Throws on failure.
  */
+const dlCache = new Map<string, { data: SpotifyDownload; expires: number }>()
+const DL_CACHE_TTL = 30 * 60 * 1000
+
 export async function resolveSpotifyDownload(spotifyUrl: string): Promise<SpotifyDownload> {
+  const hit = dlCache.get(spotifyUrl)
+  if (hit && hit.expires > Date.now()) {
+    logline("mp3", "spotify resolve cache hit")
+    return hit.data
+  }
+  if (hit) dlCache.delete(spotifyUrl)
+
   const url = `${DL_BASE}?url=${encodeURIComponent(spotifyUrl)}`
   logline("mp3", "resolving spotify download")
   const json = await getJson(url, 45000)
@@ -89,12 +102,18 @@ export async function resolveSpotifyDownload(spotifyUrl: string): Promise<Spotif
     throw new Error("spotify API: no download_url in response")
   }
   logline("mp3", `spotify resolved :: "${(r.title || "").slice(0, 50)}"`)
-  return {
+  const dl: SpotifyDownload = {
     title: r.title || "Unknown title",
     artist: r.artist || "",
     cover: r.cover || "",
     downloadUrl: r.download_url,
   }
+  if (dlCache.size > 200) {
+    const first = dlCache.keys().next().value
+    if (first) dlCache.delete(first)
+  }
+  dlCache.set(spotifyUrl, { data: dl, expires: Date.now() + DL_CACHE_TTL })
+  return dl
 }
 
 /**

@@ -30,6 +30,7 @@ function handleHelp(msg: Message): void {
     "**play** <song name> - I'll find it and sing it for you",
     "**play** <link> - play a YouTube link directly",
     "**play** <playlist link> [limit] - a whole playlist, your call how many",
+    "**play** <playlist link> shuffle - the whole playlist, surprise order",
     "**play** <link1 link2 ...> - several links at once, I'm not shy",
     "**skip** - next song, no hard feelings",
     "**loop** - round and round: Off / Single / All",

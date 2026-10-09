@@ -8,6 +8,28 @@
  */
 import { logline, logerr } from "../tools/log"
 
+/** In-memory cache for API resolves: url -> { data, expires }. */
+const resolveCache = new Map<string, { data: SnowpingTrack; expires: number }>()
+const CACHE_TTL_MS = 30 * 60 * 1000 // 30 minutes
+
+function cacheGet(url: string): SnowpingTrack | null {
+  const hit = resolveCache.get(url)
+  if (hit && hit.expires > Date.now()) {
+    logline("mp3", "resolve cache hit")
+    return hit.data
+  }
+  if (hit) resolveCache.delete(url)
+  return null
+}
+function cacheSet(url: string, data: SnowpingTrack): void {
+  if (resolveCache.size > 200) {
+    // Evict oldest
+    const first = resolveCache.keys().next().value
+    if (first) resolveCache.delete(first)
+  }
+  resolveCache.set(url, { data, expires: Date.now() + CACHE_TTL_MS })
+}
+
 const API_BASE = process.env.SNOWPING_API_BASE || "https://api.snowping.cfd/api/downloader/youtube"
 
 export interface SnowpingTrack {
@@ -25,6 +47,8 @@ export interface SnowpingTrack {
  * Throws on API error or unexpected response shape.
  */
 export async function resolveStream(youtubeUrl: string, timeoutMs = 45000): Promise<SnowpingTrack> {
+  const cached = cacheGet(youtubeUrl)
+  if (cached) return cached
   const apiUrl = `${API_BASE}?url=${encodeURIComponent(youtubeUrl)}&format=mp3`
   logline("mp3", "resolving direct stream")
 
@@ -43,13 +67,20 @@ export async function resolveStream(youtubeUrl: string, timeoutMs = 45000): Prom
       lastErr = new Error(`snowping API HTTP ${res.status}`)
       logerr("mp3", `resolve attempt ${attempt}: HTTP ${res.status}`)
       res = null
+      // Rate-limited: back off longer before retrying.
+      if (res === null && attempt < 3) {
+        // (res is null here; check status via lastErr message)
+      }
     } catch (err: any) {
       clearTimeout(timer)
       lastErr = err
       logerr("mp3", `resolve attempt ${attempt}:`, (err.message || err).slice(0, 100))
       res = null
     }
-    if (attempt < 3) await new Promise((r) => setTimeout(r, 2000 * attempt))
+    if (attempt < 3) {
+      const isRateLimit = lastErr?.message?.includes("429")
+      await new Promise((r) => setTimeout(r, isRateLimit ? 10000 * attempt : 2000 * attempt))
+    }
   }
   if (!res) throw new Error(`snowping API failed after 3 tries: ${lastErr?.message?.slice(0, 120) || lastErr}`)
 
@@ -67,8 +98,8 @@ export async function resolveStream(youtubeUrl: string, timeoutMs = 45000): Prom
     throw new Error(`snowping API: ${String(msg).slice(0, 120)}`)
   }
 
-  logline("mp3", `got stream (${dl.size || "?"}) :: "${(video?.title || "").slice(0, 50)}"`)
-  return {
+  logline("mp3", `got stream (${dl.size || "?"} ) :: "${(video?.title || "").slice(0, 50)}"`)
+  const track: SnowpingTrack = {
     title: video?.title || "Unknown title",
     duration: video?.duration || "",
     thumbnail: video?.thumbnail || "",
@@ -76,6 +107,8 @@ export async function resolveStream(youtubeUrl: string, timeoutMs = 45000): Prom
     streamUrl: dl.url,
     size: dl.size || "",
   }
+  cacheSet(youtubeUrl, track)
+  return track
 }
 
 /**

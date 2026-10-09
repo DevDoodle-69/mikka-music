@@ -144,7 +144,10 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
   } else if (query.startsWith("http")) {
     const parts = query.split(" ")
     const url = parts[0]
-    limit = parts[1] ? parseInt(parts[1]) : null
+    const rest = parts.slice(1).map((x) => x.toLowerCase())
+    const wantShuffle = rest.includes("shuffle")
+    const numPart = rest.find((x) => /^\d+$/.test(x))
+    limit = numPart ? parseInt(numPart) : null
 
     if (url.includes("list=")) {
       await tellUser(msg, queue, "unwrapping your playlist~ one sec")
@@ -174,6 +177,16 @@ async function handlePlay(msg: Message, args: string[], guild: Guild, voice: Voi
       }
       if (limit && limit > 0) {
         songs = songs.slice(0, limit)
+      }
+      if (wantShuffle && songs.length > 1) {
+        // Fisher-Yates: every song plays, but in surprise order.
+        for (let i = songs.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1))
+          ;[songs[i], songs[j]] = [songs[j], songs[i]]
+        }
+        logline("music", `playlist shuffled: ${songs.length} songs`)
+        await tellUser(msg, queue, `shuffled **${songs.length}** songs~ every one will play, in surprise order`)
+      } else if (limit && limit > 0) {
         await tellUser(msg, queue, `added **${songs.length}** songs~ kept it to ${limit} like you asked`)
       } else {
         await tellUser(msg, queue, lines.playlistUnwrapped(songs.length))
