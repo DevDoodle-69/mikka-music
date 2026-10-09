@@ -28,21 +28,30 @@ export async function resolveStream(youtubeUrl: string, timeoutMs = 45000): Prom
   const apiUrl = `${API_BASE}?url=${encodeURIComponent(youtubeUrl)}&format=mp3`
   logline("mp3", "resolving direct stream")
 
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
-  let res: any
-  try {
-    res = await fetch(apiUrl, {
-      signal: ctrl.signal,
-      headers: { "User-Agent": "mikka-music/1.0" },
-    })
-  } catch (err: any) {
-    clearTimeout(timer)
-    throw new Error(`snowping API unreachable: ${err.message?.slice(0, 100) || err}`)
+  let res: any = null
+  let lastErr: any = null
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+    try {
+      res = await fetch(apiUrl, {
+        signal: ctrl.signal,
+        headers: { "User-Agent": "mikka-music/1.0" },
+      })
+      clearTimeout(timer)
+      if (res.ok) break
+      lastErr = new Error(`snowping API HTTP ${res.status}`)
+      logerr("mp3", `resolve attempt ${attempt}: HTTP ${res.status}`)
+      res = null
+    } catch (err: any) {
+      clearTimeout(timer)
+      lastErr = err
+      logerr("mp3", `resolve attempt ${attempt}:`, (err.message || err).slice(0, 100))
+      res = null
+    }
+    if (attempt < 3) await new Promise((r) => setTimeout(r, 2000 * attempt))
   }
-  clearTimeout(timer)
-
-  if (!res.ok) throw new Error(`snowping API HTTP ${res.status}`)
+  if (!res) throw new Error(`snowping API failed after 3 tries: ${lastErr?.message?.slice(0, 120) || lastErr}`)
 
   let json: any
   try {
@@ -83,31 +92,50 @@ export async function downloadSnowpingMp3(streamUrl: string, timeoutMs = 120000)
   const tmp = path.join(os.tmpdir(), `mikka-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp3`)
   logline("mp3", "downloading mp3 file…")
 
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
-  let res: any
-  try {
-    res = await fetch(streamUrl, {
-      signal: ctrl.signal,
-      headers: { "User-Agent": "mikka-music/1.0" },
-    })
-  } catch (err: any) {
-    clearTimeout(timer)
-    throw new Error(`mp3 download unreachable: ${err.message?.slice(0, 100) || err}`)
+  const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+  // Retry loop: Render's network can hiccup; don't give up on one failure.
+  let res: any = null
+  let lastErr: any = null
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+    try {
+      logline("mp3", `download attempt ${attempt}/3`)
+      res = await fetch(streamUrl, {
+        signal: ctrl.signal,
+        headers: {
+          "User-Agent": BROWSER_UA,
+          "Accept": "audio/mpeg,audio/*;q=0.9,*/*;q=0.1",
+          "Referer": "https://api.snowping.cfd/",
+        },
+      })
+      clearTimeout(timer)
+      if (res.ok) break
+      lastErr = new Error(`mp3 download HTTP ${res.status}`)
+      logerr("mp3", `attempt ${attempt}: HTTP ${res.status}`)
+      res = null
+    } catch (err: any) {
+      clearTimeout(timer)
+      lastErr = err
+      logerr("mp3", `attempt ${attempt} failed:`, (err.message || err).slice(0, 120))
+      res = null
+    }
+    if (attempt < 3) await new Promise((r) => setTimeout(r, 2000 * attempt))
   }
-  if (!res.ok) {
-    clearTimeout(timer)
-    throw new Error(`mp3 download HTTP ${res.status}`)
+  if (!res) {
+    throw new Error(`mp3 download failed after 3 tries: ${lastErr?.message?.slice(0, 120) || lastErr}`)
+  }
+  const ct = res.headers.get("content-type") || ""
+  if (ct.includes("text/html")) {
+    throw new Error("mp3 download returned an HTML page (blocked or expired link)")
   }
   try {
     const out = fs.createWriteStream(tmp)
     await pipeline(res.body as any, out)
   } catch (err: any) {
-    clearTimeout(timer)
     try { fs.unlinkSync(tmp) } catch {}
     throw new Error(`mp3 download failed mid-stream: ${err.message?.slice(0, 100) || err}`)
   }
-  clearTimeout(timer)
 
   let size = 0
   try { size = fs.statSync(tmp).size } catch {}

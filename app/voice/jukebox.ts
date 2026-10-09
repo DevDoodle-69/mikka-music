@@ -380,7 +380,9 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
       }
       audio = pipeFile(tmpPath, seekTime)
     } catch (err) {
-      await tellChannel(queue, `couldn't fetch **${song.title}** right now~ skipping ahead`)
+      const reason = ((err as Error).message || "unknown").slice(0, 120)
+      logerr("music", `fetch failed for "${song.title}":`, reason)
+      await tellChannel(queue, `couldn't fetch **${song.title}** (${reason})~ skipping ahead`)
       queue.playing = false
       dropTemp(queue)
       queue.songs.shift()

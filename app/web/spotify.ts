@@ -26,21 +26,27 @@ export interface SpotifyDownload {
   downloadUrl: string
 }
 
-async function getJson(url: string, timeoutMs = 30000): Promise<any> {
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
-  try {
-    const res = await fetch(url, {
-      signal: ctrl.signal,
-      headers: { "User-Agent": "mikka-music/1.0" },
-    })
-    clearTimeout(timer)
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return await res.json()
-  } catch (err: any) {
-    clearTimeout(timer)
-    throw err
+async function getJson(url: string, timeoutMs = 30000, retries = 3): Promise<any> {
+  let lastErr: any = null
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+    try {
+      const res = await fetch(url, {
+        signal: ctrl.signal,
+        headers: { "User-Agent": "mikka-music/1.0" },
+      })
+      clearTimeout(timer)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return await res.json()
+    } catch (err: any) {
+      clearTimeout(timer)
+      lastErr = err
+      logerr("tube", `spotify API attempt ${attempt}:`, (err.message || err).slice(0, 100))
+      if (attempt < retries) await new Promise((r) => setTimeout(r, 2000 * attempt))
+    }
   }
+  throw lastErr
 }
 
 /** Pick the largest image from a Spotify images array. */

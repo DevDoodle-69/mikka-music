@@ -2,6 +2,8 @@ import { joinVoiceChannel, createAudioPlayer, AudioPlayerStatus } from "@discord
 import { watchConnection } from "../voice/watchdog"
 import { clearSongTimers } from "../voice/jukebox"
 import { isStayMode, setStayMode } from "../voice/stay"
+import { resolveStream, downloadSnowpingMp3 } from "../web/snowping"
+import { searchSpotify, resolveSpotifyDownload } from "../web/spotify"
 import { Message, Guild, VoiceChannel, Channel } from "selfbotsdk-discordjs"
 import { queues, saveState, createDefaultQueue, markIntentionalLeave, leaveAllVoiceSessions } from "../voice/shelf"
 import { playTrack, playStation } from "../voice/jukebox"
@@ -414,6 +416,54 @@ async function handleStay(msg: Message): Promise<void> {
   }
 }
 
+async function handleDiag(msg: Message): Promise<void> {
+  const out: string[] = []
+  out.push("running diagnostics~ one sec")
+
+  // 1. YouTube API resolve
+  try {
+    const t = await resolveStream("https://www.youtube.com/watch?v=dQw4w9WgXcQ", 20000)
+    out.push(`youtube API: OK (${t.title.slice(0, 30)})`)
+    // 2. YouTube file download (first 64KB only)
+    try {
+      const ctrl = new AbortController()
+      setTimeout(() => ctrl.abort(), 20000)
+      const dl = await fetch(t.streamUrl, {
+        signal: ctrl.signal,
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0.0.0" },
+      })
+      out.push(`youtube download: HTTP ${dl.status} (${dl.headers.get("content-type")})`)
+    } catch (e: any) {
+      out.push(`youtube download: FAIL ${(e.message || e).slice(0, 80)}`)
+    }
+  } catch (e: any) {
+    out.push(`youtube API: FAIL ${(e.message || e).slice(0, 80)}`)
+  }
+
+  // 3. Spotify API resolve
+  try {
+    const dl = await resolveSpotifyDownload("https://open.spotify.com/track/709ZIqPHyFOpx2QdjmeWAM")
+    out.push(`spotify API: OK (${dl.title.slice(0, 30)})`)
+    // 4. Spotify file download (headers only)
+    try {
+      const ctrl = new AbortController()
+      setTimeout(() => ctrl.abort(), 20000)
+      const res = await fetch(dl.downloadUrl, {
+        signal: ctrl.signal,
+        method: "HEAD",
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0.0.0" },
+      })
+      out.push(`spotify download: HTTP ${res.status} (${res.headers.get("content-type")})`)
+    } catch (e: any) {
+      out.push(`spotify download: FAIL ${(e.message || e).slice(0, 80)}`)
+    }
+  } catch (e: any) {
+    out.push(`spotify API: FAIL ${(e.message || e).slice(0, 80)}`)
+  }
+
+  await replySoft(msg, out.join("\n"))
+}
+
 export {
   handleTest,
   handleHelp,
@@ -426,5 +476,6 @@ export {
   handleSilent,
   handleProxySet,
   handleSleep,
-  handleStay
+  handleStay,
+  handleDiag
 }
