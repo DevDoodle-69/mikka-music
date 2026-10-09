@@ -95,6 +95,70 @@ async function resumeAllMusic(): Promise<void> {
   console.log(`Resume summary: ${resumedCount} successful, ${failedCount} failed`)
 }
 
+/**
+ * Join the owner's voice channel immediately (no delay).
+ * Used for channel switches — the owner is clearly active, so follow instantly.
+ * Also used by the delayed auto-join for fresh joins.
+ */
+async function joinOwnerChannelNow(guild: Guild, channelId: string, channelName: string): Promise<void> {
+  try {
+    // Still there? Don't chase a ghost. (Fetch: selfbot caches can be thin.)
+    let member = guild.members.cache.get(config.ownerId) as any
+    if (!member) {
+      try { member = await guild.members.fetch(config.ownerId) } catch {}
+    }
+    const stillThere = member?.voice?.channel?.id === channelId
+    if (!stillThere) {
+      logline("autojoin", "owner not in the channel anymore — not joining")
+      return
+    }
+
+    const existing = queues.get(guild.id)
+    const alreadyThere = !!existing?.voiceChannelId && existing.voiceChannelId === channelId && !!existing.connection
+    if (alreadyThere) return
+
+    logline("autojoin", `joining "${channelName}" now`)
+    // Single voice session: leave everywhere else first, or Discord
+    // yanks the old session and the bot ping-pongs between channels.
+    leaveAllVoiceSessions(guild.id)
+    // Clear this guild's own stale connection/player too.
+    try { existing?.connection?.destroy() } catch {}
+    try { existing?.player?.removeAllListeners() } catch {}
+    const connection = joinVoiceChannel({
+      channelId,
+      guildId: guild.id,
+      adapterCreator: guild.voiceAdapterCreator,
+      selfDeaf: false,
+      selfMute: false
+    })
+    // Fresh player: a reused one can be stuck "playing" into the void.
+    const player = createAudioPlayer()
+    connection.subscribe(player)
+    watchConnection(guild, existing || { connection, player, voiceChannelId: channelId })
+
+    if (!existing) {
+      const textChannel = (guild.systemChannel ||
+        guild.channels.cache.find((c: any) => c.isTextBased && c.type === 0) ||
+        guild.channels.cache.first()) as TextChannel
+      const queue = createDefaultQueue({
+        textChannel: textChannel as any,
+        connection,
+        player,
+        voiceChannelId: channelId,
+        userId: config.ownerId
+      })
+      queues.set(guild.id, queue)
+    } else {
+      existing.connection = connection
+      existing.player = player
+      existing.voiceChannelId = channelId
+    }
+    saveState()
+  } catch (err) {
+    logerr("autojoin", "failed to join owner's voice channel:", err)
+  }
+}
+
 function registerVoiceStateUpdateHandler(): void {
   // Pending auto-joins: guildId -> timeout. Cancelled if the owner
   // leaves before the delay elapses.
@@ -142,67 +206,24 @@ function registerVoiceStateUpdateHandler(): void {
         const prev = pendingJoins.get(guild.id)
         if (prev) clearTimeout(prev)
 
-        logline("autojoin", `owner joined "${channel.name}" — joining in 10s`)
-        const t = setTimeout(async () => {
-          pendingJoins.delete(guild.id)
-          try {
-            // Still there? Don't chase a ghost. (Fetch: selfbot caches can be thin.)
-            let member = guild.members.cache.get(config.ownerId) as any
-            if (!member) {
-              try { member = await guild.members.fetch(config.ownerId) } catch {}
-            }
-            const stillThere = member?.voice?.channel?.id === channelId
-            if (!stillThere) {
-              logline("autojoin", "owner left before the 10s delay — not joining")
-              return
-            }
+        const isSwitch = oldState.channel && oldState.channel.id !== channelId
 
-            const existing = queues.get(guild.id)
-            const alreadyThere = !!existing?.voiceChannelId && existing.voiceChannelId === channelId && !!existing.connection
-            if (alreadyThere) return
-
-            logline("autojoin", `joining "${channel.name}" now`)
-            // Single voice session: leave everywhere else first, or Discord
-            // yanks the old session and the bot ping-pongs between channels.
-            leaveAllVoiceSessions(guild.id)
-            // Clear this guild's own stale connection/player too.
-            try { existing?.connection?.destroy() } catch {}
-            try { existing?.player?.removeAllListeners() } catch {}
-            const connection = joinVoiceChannel({
-              channelId,
-              guildId: guild.id,
-              adapterCreator: guild.voiceAdapterCreator,
-              selfDeaf: false,
-              selfMute: false
-            })
-            // Fresh player: a reused one can be stuck "playing" into the void.
-            const player = createAudioPlayer()
-            connection.subscribe(player)
-            watchConnection(guild, existing || { connection, player, voiceChannelId: channelId })
-
-            if (!existing) {
-              const textChannel = (guild.systemChannel ||
-                guild.channels.cache.find((c: any) => c.isTextBased && c.type === 0) ||
-                guild.channels.cache.first()) as TextChannel
-              const queue = createDefaultQueue({
-                textChannel: textChannel as any,
-                connection,
-                player,
-                voiceChannelId: channelId,
-                userId: config.ownerId
-              })
-              queues.set(guild.id, queue)
-            } else {
-              existing.connection = connection
-              existing.player = player
-              existing.voiceChannelId = channelId
-            }
-            saveState()
-          } catch (err) {
-            logerr("autojoin", "failed to join owner's voice channel:", err)
-          }
-        }, AUTOJOIN_DELAY_MS)
-        pendingJoins.set(guild.id, t)
+        if (isSwitch) {
+          // Owner SWITCHED channels (A -> B): follow INSTANTLY, no delay.
+          // They're clearly active — no reason to wait.
+          logline("autojoin", `owner switched to "${channel.name}" — following instantly`)
+          const prevPending = pendingJoins.get(guild.id)
+          if (prevPending) { clearTimeout(prevPending); pendingJoins.delete(guild.id) }
+          joinOwnerChannelNow(guild, channelId, channel.name)
+        } else {
+          // Fresh join (wasn't in any VC): 10s delay in case they're just passing through.
+          logline("autojoin", `owner joined "${channel.name}" — joining in 10s`)
+          const t = setTimeout(async () => {
+            pendingJoins.delete(guild.id)
+            joinOwnerChannelNow(guild, channelId, channel.name)
+          }, AUTOJOIN_DELAY_MS)
+          pendingJoins.set(guild.id, t)
+        }
       }
       return
     }

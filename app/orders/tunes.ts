@@ -540,6 +540,66 @@ async function handleStop(msg: Message, queue: Queue | undefined): Promise<void>
   await tellUser(msg, queue, lines.stopped())
 }
 
+/** Clear EVERYTHING: stop playback, wipe the queue, drop temp files, reset all state. */
+async function handleClear(msg: Message, guild: Guild | undefined, queue: Queue | undefined): Promise<void> {
+  if (queue) clearSongTimers(queue)
+  if (!queue) {
+    await tellUser(msg, queue, "nothing to clear, all clean~")
+    return
+  }
+
+  // Kill all audio processes.
+  if (queue.currentProcesses) {
+    try { queue.currentProcesses.ytdlp?.kill() } catch {}
+    try { queue.currentProcesses.ff.kill() } catch {}
+  }
+  if (queue.radioFfmpeg) { try { queue.radioFfmpeg.kill() } catch {} queue.radioFfmpeg = null }
+  if (queue.metadataDetector) {
+    try { queue.metadataDetector.stop() } catch {}
+    queue.metadataDetector = undefined
+  }
+
+  // Drop temp files (current + preloaded).
+  dropTemp(queue)
+  if (queue.preloaded?.tempFile) {
+    try { fs.unlinkSync(queue.preloaded.tempFile) } catch {}
+    queue.preloaded = null
+  }
+  if (queue.currentTempFile) {
+    try { fs.unlinkSync(queue.currentTempFile) } catch {}
+    queue.currentTempFile = null
+  }
+
+  // Cancel sleep timer if one is running.
+  try {
+    const { cancelSleep } = await import("../voice/sleep")
+    if (guild) cancelSleep(guild.id)
+  } catch {}
+
+  // Reset all playback state.
+  queue.songs = []
+  queue.playHistory = []
+  queue.loopMode = 0
+  queue.radioUrl = null
+  queue.radioName = null
+  queue.radioStopped = true
+  queue.playing = false
+  queue.isSkipping = false
+  queue.isReconnecting = false
+  queue.isMusicReconnecting = false
+  queue.musicReconnectAttempts = 0
+  queue.musicReconnectMessage = null
+  queue.currentSong = undefined
+  queue.currentProcesses = undefined
+  queue.hasReactionUI = false
+  queue.radioMessage = undefined
+  try { queue.player.stop() } catch {}
+
+  saveState()
+  logline("command", "cleared everything — queue wiped, playback stopped, temp files dropped")
+  await tellUser(msg, queue, lines.cleared())
+}
+
 async function handleVolume(msg: Message, args: string[], queue: Queue | undefined): Promise<void> {
   if (!queue) {
     await tellUser(msg, queue, "nothing's playing though~")
@@ -578,6 +638,7 @@ export {
   handleShuffle,
   handleQueue,
   handleStop,
+  handleClear,
   handleVolume,
   playlistViaYtdlp
 }

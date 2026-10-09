@@ -3,7 +3,7 @@ import { AudioPlayerStatus } from "@discordjs/voice"
 import { Message, Guild, VoiceChannel } from "selfbotsdk-discordjs"
 import config from "../setup"
 import { queues, isConnectionLive, leaveAllVoiceSessions } from "../voice/shelf"
-import { handlePlay, handleAiPlay, handleSkip, handleLoop, handleShuffle, handleQueue, handleStop, handleVolume } from "./tunes"
+import { handlePlay, handleAiPlay, handleSkip, handleLoop, handleShuffle, handleQueue, handleStop, handleClear, handleVolume } from "./tunes"
 import { handleRadio, handleRadioStats } from "./tuner"
 import { handleTest, handleHelp, handleLeave, handleClearChat, handleClearReactions, handleSync, handleState, handlePanel, handleSilent, handleProxySet, handleSleep, handleStay, handleDiag, handleProxy } from "./handy"
 import { replySoft, saySoft } from "../tools/say"
@@ -167,6 +167,10 @@ async function handleMessageCreate(msg: Message): Promise<void> {
     }
     case "stop": {
       handleStop(msg, queue)
+      return
+    }
+    case "clear": {
+      await handleClear(msg, guild, queue)
       return
     }
     case "volume":

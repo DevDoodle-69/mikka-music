@@ -198,18 +198,16 @@ export function fetching(title: string): string {
 
 export function nowPlaying(title: string, durStr: string): string {
   return pick([
+    `now playing **${title}**${durStr}`,
+    `**${title}**${durStr} — enjoy`,
+    `playing **${title}**${durStr}`,
     `now spinning **${title}**${durStr}~ this one's for you`,
     `**${title}**${durStr}~ sing along with me`,
     `ooh I love this one~ **${title}**${durStr}`,
-    `**${title}**${durStr} is on~ turn it up with me`,
-    `pressed play on **${title}**${durStr}~ sing it like you mean it`,
-    `**${title}**${durStr}~ oh this part gives me goosebumps`,
+    `**${title}**${durStr} is on~ turn it up`,
+    `pressed play on **${title}**${durStr}`,
     `your ears are in for a treat~ **${title}**${durStr}`,
-    `dropping **${title}**${durStr} like it's hot~`,
-    `**${title}**${durStr}~ I queued this one specially for you`,
-    `lights low, volume up~ **${title}**${durStr}`,
-    `this is **${title}**${durStr} and it's about to live in your head rent-free`,
-    `hit play on **${title}**${durStr}~ come sing along with me`,
+    `**${title}**${durStr} — great pick`,
   ])
 }
 
@@ -228,6 +226,16 @@ export function stopped(): string {
     "all quiet~ cleared the stage",
     "stopped~ the crowd goes silent",
     "hushed~ everything's cleared",
+  ])
+}
+
+export function cleared(): string {
+  return pick([
+    "all cleared~ fresh start, what should we play?",
+    "wiped clean~ queue's empty, stage is yours",
+    "everything's cleared~ ready for something new",
+    "clean slate~ hit me with your next vibe",
+    "cleared it all~ let's start fresh, shall we?",
   ])
 }
 
