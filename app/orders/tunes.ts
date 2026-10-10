@@ -16,7 +16,7 @@ import { dropTemp } from "../web/fetchmp3"
 import { watchConnection } from "../voice/watchdog"
 import { searchSpotify, findOnSpotify, resolveSpotifyPlaylist } from "../web/spotify"
 import { getPlatform } from "../web/platform"
-import { listTracks, addFromUrl } from "../web/playlist"
+// (playlist file helpers retired — the playlist is now a name+URL database in web/playlistdb.ts)
 
 /**
  * @Mikka playlist play all   — shuffle-play every uploaded song
@@ -25,84 +25,93 @@ import { listTracks, addFromUrl } from "../web/playlist"
  * @Mikka playlist add <url>  — download a song link into My Playlist
  */
 async function handlePlaylist(msg: Message, args: string[], guild: Guild, voice: VoiceChannel | null, queue: Queue | undefined): Promise<void> {
+  const { listSongs, addSong, removeSong, findSong, platformForUrl } = await import("../web/playlistdb")
   const sub = (args[0] || "").toLowerCase()
+
+  // playlist add <url> <song name...> — save a song to the database.
   if (sub === "add") {
-    const urls = args.slice(1).filter((u) => /^https?:\/\//i.test(u))
-    if (urls.length === 0) {
-      await tellUser(msg, queue, "give me link(s)~ `@Mikka playlist add <song link>` — you can drop several at once")
+    const url = args.slice(1).find((u) => /^https?:\/\//i.test(u))
+    if (!url) {
+      await tellUser(msg, queue, "give me a link and a name~ `@Mikka playlist add <song link> <song name>`")
       return
     }
-    await tellUser(msg, queue, `grabbing ${urls.length} for your playlist~ one sec`)
-    let okCount = 0
-    const failed: string[] = []
-    for (const url of urls.slice(0, 10)) {
-      const r = await addFromUrl(url)
-      if (r.ok) okCount++
-      else failed.push(url.slice(0, 40))
-    }
-    if (okCount > 0) {
-      await tellUser(msg, queue, `added **${okCount}** to your playlist~ ${failed.length ? `(${failed.length} didn't work)` : "ready to shuffle"}`)
-    } else {
-      await tellUser(msg, queue, `couldn't add those~ ${failed.length ? "check the links?" : ""}`)
-    }
-    return
-  }
-  if (sub === "debug") {
-    const { debugPlaylist } = await import("../web/playlist")
-    const d = debugPlaylist()
-    const linesOut = [
-      `dir: \`${d.dir}\``,
-      `files on disk (${d.files.length}): ${d.files.slice(0, 10).join(", ") || "none"}`,
-      `index entries: ${Object.keys(d.index).length}`,
-      ...d.resolved.slice(0, 10).map((r) => `• ${r.name} → ${r.path ? "OK" : "MISSING"}`),
-    ]
-    await tellUser(msg, queue, linesOut.join("\n"))
-    return
-  }
-  if (sub === "list") {
-    const tracks = listTracks()
-    if (tracks.length === 0) {
-      await tellUser(msg, queue, "my playlist is empty~ upload songs from the dashboard and I'll keep them here")
+    const name = args.slice(1).filter((a) => a !== url).join(" ").trim()
+    if (!name) {
+      await tellUser(msg, queue, "and what should I call it?~ `@Mikka playlist add <song link> <song name>`")
       return
     }
-    const linesOut = tracks.slice(0, 20).map((t, i) => `**${i + 1}.** ${t.name} (${(t.size / 1048576).toFixed(1)}MB)`)
-    const more = tracks.length > 20 ? `\n…and ${tracks.length - 20} more on the dashboard` : ""
-    await tellUser(msg, queue, `my playlist has **${tracks.length}** songs~\n${linesOut.join("\n")}${more}`)
+    try {
+      const entry = addSong(name, url)
+      const plat = platformForUrl(url)
+      const note = plat === "direct"
+        ? "saved — direct link, plays even if the APIs are down"
+        : `saved — ${plat} link, I'll resolve it when it plays`
+      await tellUser(msg, queue, `added **${entry.name}** to your playlist~ ${note}`)
+    } catch (err) {
+      await tellUser(msg, queue, `couldn't add that~ ${(err as Error).message}`)
+    }
     return
   }
+
+  // playlist remove <n|name>
+  if (sub === "remove" || sub === "delete" || sub === "del") {
+    const query = args.slice(1).join(" ").trim()
+    if (!query) {
+      await tellUser(msg, queue, "which one?~ `@Mikka playlist remove <number or name>`")
+      return
+    }
+    const removed = removeSong(query)
+    if (removed) await tellUser(msg, queue, `removed **${removed.name}** from your playlist~`)
+    else await tellUser(msg, queue, "couldn't find that one~ check `@Mikka playlist list`")
+    return
+  }
+
+  // playlist play <n|name|all>
   if (sub === "play") {
-    const tracks = listTracks()
-    if (tracks.length === 0) {
-      await tellUser(msg, queue, "my playlist is empty on this server~ add songs with `@Mikka playlist add <link>` or upload on the dashboard, then I'll shuffle them")
+    const songs = listSongs()
+    if (songs.length === 0) {
+      await tellUser(msg, queue, "my playlist is empty~ add songs with `@Mikka playlist add <link> <name>` and I'll keep them forever")
       return
     }
-    const arg = (args[1] || "all").toLowerCase()
-    // Fisher-Yates shuffle.
-    const picked = [...tracks]
-    for (let i = picked.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1))
-      ;[picked[i], picked[j]] = [picked[j], picked[i]]
-    }
-    let chosen = picked
-    if (arg !== "all") {
-      const n = parseInt(arg)
-      if (isNaN(n) || n < 1) {
-        await tellUser(msg, queue, "say `playlist play all` or a number~ like `playlist play 10`")
+    const arg = args.slice(1).join(" ").trim().toLowerCase() || "all"
+    let chosen: typeof songs
+    if (arg === "all") {
+      // Fisher-Yates shuffle.
+      chosen = [...songs]
+      for (let i = chosen.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1))
+        ;[chosen[i], chosen[j]] = [chosen[j], chosen[i]]
+      }
+    } else {
+      const one = findSong(arg)
+      if (!one) {
+        await tellUser(msg, queue, "couldn't find that one~ try `@Mikka playlist list`")
         return
       }
-      chosen = picked.slice(0, Math.min(n, picked.length))
+      chosen = [one]
     }
-    const songs: Song[] = chosen.map((t) => ({
-      title: t.name.replace(/\.[^.]+$/, ""),
-      url: t.name, // file name — resolved via trackPath at play time
-      platform: "local" as const,
+    const queueSongs: Song[] = chosen.map((e) => ({
+      title: e.name, // the name you gave it — she knows it by name
+      url: e.url,
+      platform: platformForUrl(e.url) as Song["platform"],
     }))
-    await tellUser(msg, queue, `shuffling **${songs.length}** from your playlist~ let's go`)
-    logline("music", `playlist play: ${songs.length} shuffled local tracks`)
-    await enqueueAndPlay(msg, guild, voice, queue, songs)
+    await tellUser(msg, queue, chosen.length === 1
+      ? `playing **${chosen[0].name}** from your playlist~`
+      : `shuffling **${chosen.length}** from your playlist~ let's go`)
+    logline("music", `playlist play: ${chosen.length} song(s) from DB`)
+    await enqueueAndPlay(msg, guild, voice, queue, queueSongs)
     return
   }
-  await tellUser(msg, queue, "try `@Mikka playlist play all`, `@Mikka playlist play 10`, `@Mikka playlist add <link>`, or `@Mikka playlist list`~")
+
+  // playlist / playlist list — show all songs with their names.
+  const songs = listSongs()
+  if (songs.length === 0) {
+    await tellUser(msg, queue, "my playlist is empty~ add your first song with `@Mikka playlist add <link> <name>`")
+    return
+  }
+  const linesOut = songs.slice(0, 25).map((s, i) => `**${i + 1}.** ${s.name}`)
+  const more = songs.length > 25 ? `\n…and ${songs.length - 25} more` : ""
+  await tellUser(msg, queue, `my playlist — **${songs.length}** songs~\n${linesOut.join("\n")}${more}\n\nplay one: \`@Mikka playlist play 3\` · shuffle: \`@Mikka playlist play all\``)
 }
 
 interface PlaylistJSON {

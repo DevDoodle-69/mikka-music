@@ -33,9 +33,11 @@ function handleHelp(msg: Message): void {
     "**play** <playlist link> shuffle - the whole playlist, surprise order",
     "**play** <link1 link2 ...> - several links at once, I'm not shy",
     "**aiplay** <describe the vibe> [limit] - I pick the songs with AI~",
-    "**playlist** play all - shuffle everything you uploaded on the dashboard",
-    "**playlist** play <n> - shuffle n of your uploads (playlist list to peek)",
-    "**playlist** add <link> - download a song link into your playlist",
+    "**playlist** - show all your saved songs",
+    "**playlist** add <link> <name> - save a song (direct/YouTube/Spotify link)",
+    "**playlist** play all - shuffle your whole playlist",
+    "**playlist** play <n or name> - play one song",
+    "**playlist** remove <n or name> - delete a song",
     "**skip** - next song, no hard feelings",
     "**loop** - round and round: Off / Single / All",
     "**shuffle** - let fate pick the order",
@@ -498,7 +500,7 @@ async function handleDiag(msg: Message): Promise<void> {
 }
 
 async function handleProxy(msg: Message, args: string[]): Promise<void> {
-  const { proxyCount, isProxyEnabled, currentProxy, nextProxy, setProxyEnabled, checkOutboundIp } =
+  const { proxyCount, proxyHealth, isProxyEnabled, currentProxy, nextProxy, setProxyEnabled, checkOutboundIp } =
     await import("../web/proxy")
 
   const sub = (args[0] || "").toLowerCase()
@@ -537,10 +539,10 @@ async function handleProxy(msg: Message, args: string[]): Promise<void> {
   const cur = currentProxy()
   const ip = await checkOutboundIp()
   await msg.channel.send(
-    `proxy **${isProxyEnabled() ? "ON" : "OFF"}** — ${count} configured\n` +
+    `proxy **${isProxyEnabled() ? "ON" : "OFF"}** — ${proxyHealth()}\n` +
     `current: ${cur?.masked || "none"}\n` +
     `outbound IP: **${ip}**\n` +
-    `use \`proxy next\` to switch IP, \`proxy off\` to go direct`
+    `bad ones auto-cool down 10min · \`proxy next\` to switch IP, \`proxy off\` to go direct`
   )
 }
 

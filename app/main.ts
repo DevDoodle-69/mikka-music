@@ -59,6 +59,15 @@ client.on("ready", async () => {
   } catch (err) {
     console.error("playlist restore error:", (err as Error).message?.slice(0, 80))
   }
+  // Restore the playlist song database (name + URL entries).
+  try {
+    const { setPlaylistDbBackup, restorePlaylistDb } = await import("./web/playlistdb")
+    setPlaylistDbBackup(client, config.ownerId)
+    const n = await restorePlaylistDb(client, config.ownerId)
+    if (n > 0) console.log(`🎵 Playlist DB restored: ${n} songs`)
+  } catch (err) {
+    console.error("playlist DB restore error:", (err as Error).message?.slice(0, 80))
+  }
 
   // Clean up stale temp files from crashes/restarts.
   try {

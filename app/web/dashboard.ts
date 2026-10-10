@@ -16,7 +16,6 @@
  */
 import { queues } from "../voice/shelf"
 import { recentLogs, logline, logerr } from "../tools/log"
-import { listTracks, saveUpload, deleteTrack, addFromUrl } from "./playlist"
 
 let botClient: any = null
 const startedAt = Date.now()
@@ -314,32 +313,6 @@ const PAGE = `<!DOCTYPE html>
       <div id="nowPlaying"></div>
     </div>
 
-    <div class="card wide">
-      <div class="card-head">
-        <svg viewBox="0 0 24 24"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/></svg>
-        <h2>My Playlist</h2><span class="right" id="plCount"></span>
-      </div>
-      <div class="drop" id="drop">
-        <svg viewBox="0 0 24 24"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/></svg>
-        <b>Drop audio files here, or tap to browse</b>
-        <span>mp3 · m4a · wav · ogg · flac · opus — up to 100MB each</span>
-        <input type="file" id="fileInput" accept="audio/*,.mp3,.m4a,.wav,.ogg,.oga,.opus,.flac,.aac,.wma" multiple style="display:none">
-      </div>
-      <div id="uploads"></div>
-      <div class="urlrow">
-        <input id="urlInput" type="url" placeholder="…or paste a song link (YouTube / Spotify / mp3)" autocomplete="off">
-        <button id="urlAdd" class="btn">Add</button>
-      </div>
-      <div class="selbar" id="selbar">
-        <span id="selCount">0 selected</span>
-        <span style="flex:1"></span>
-        <button class="btn ghost" id="selClear">Clear</button>
-        <button class="btn" id="selDelete">Delete selected</button>
-      </div>
-      <div id="playlist" style="margin-top:6px"></div>
-      <div class="hint">Then in Discord: <code>@Mikka playlist play all</code> shuffles everything, <code>@Mikka playlist play 10</code> shuffles 10, <code>@Mikka playlist add &lt;link&gt;</code> saves a link.</div>
-    </div>
-
     <div class="card">
       <div class="card-head">
         <svg viewBox="0 0 24 24"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/></svg>
@@ -380,10 +353,7 @@ const PAGE = `<!DOCTYPE html>
   const musicSvg = '<svg viewBox="0 0 24 24"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>';
   const clockSvg = '<svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 10.59l-4.24 4.25-.71-.71L11.59 13H11V7h2v6.59z"/></svg>';
   const trashSvg = '<svg viewBox="0 0 24 24"><path d="M6 19a2 2 0 002 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>';
-  const checkSvg = '<svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>';
   const speakerSvg = '<svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3a4.5 4.5 0 00-2.5-4.03v8.05A4.47 4.47 0 0016.5 12z"/></svg>';
-  const prettyName = n => String(n||'').replace(/\.[^.]+$/, '');
-  const selected = new Set();
   function dashKey(){
     let k = sessionStorage.getItem('dashKey') || '';
     if (NEEDS_KEY && !k) { k = prompt('Dashboard key:') || ''; sessionStorage.setItem('dashKey', k); }
@@ -429,111 +399,8 @@ const PAGE = `<!DOCTYPE html>
       const el = $('logs'); el.scrollTop = el.scrollHeight;
     } catch(e) {}
   }
-  function refreshSelbar(){
-    const n = selected.size;
-    $('selbar').classList.toggle('show', n > 0);
-    $('selCount').textContent = n + (n===1 ? ' selected' : ' selected');
-    document.querySelectorAll('#playlist .track').forEach(row => {
-      const on = selected.has(row.getAttribute('data-name'));
-      row.classList.toggle('sel', on);
-      const tick = row.querySelector('.tick');
-      if (tick) tick.classList.toggle('on', on);
-    });
-  }
-  async function loadPlaylist(){
-    try {
-      const j = await (await fetch('/api/playlist',{cache:'no-store'})).json();
-      const tracks = j.tracks || [];
-      // drop selections for tracks that no longer exist
-      [...selected].forEach(n => { if (!tracks.some(t => t.name === n)) selected.delete(n); });
-      $('plCount').textContent = tracks.length + (tracks.length===1?' song':' songs');
-      $('playlist').innerHTML = tracks.length ? tracks.map(t =>
-        '<div class="track" data-name="'+esc(t.name)+'">' +
-        '<button class="tick" title="Select">'+checkSvg+'</button>' +
-        '<div class="ticon">'+musicSvg+'</div>' +
-        '<div class="tname" title="'+esc(t.name)+'">'+esc(prettyName(t.name))+'</div><div class="tsize">'+fmtMB(t.size)+'</div>' +
-        '<button class="icon-btn del" title="Delete">'+trashSvg+'</button></div>'
-      ).join('') : '<div class="empty">'+musicSvg+'nothing here yet~ upload your first song above</div>';
-      $('playlist').querySelectorAll('.track').forEach(row => {
-        const name = row.getAttribute('data-name');
-        row.querySelector('.tick').addEventListener('click', () => {
-          selected.has(name) ? selected.delete(name) : selected.add(name);
-          refreshSelbar();
-        });
-        row.querySelector('.del').addEventListener('click', () => delTrack(name));
-      });
-      refreshSelbar();
-    } catch(e) {}
-  }
-  async function delTrack(name){
-    if (!confirm('Delete "'+name+'" from the playlist?')) return;
-    let url = '/api/playlist?name='+encodeURIComponent(name);
-    if (NEEDS_KEY) url += '&key='+encodeURIComponent(dashKey());
-    try { await fetch(url, {method:'DELETE'}); } catch(e) {}
-    loadPlaylist();
-  }
-  async function addViaUrl(){
-    const inp = $('urlInput'), btn = $('urlAdd');
-    const url = inp.value.trim();
-    if (!url) { inp.focus(); return; }
-    btn.disabled = true; btn.textContent = 'Adding…';
-    const row = upRow(url.length > 48 ? url.slice(0,48)+'…' : url);
-    try {
-      let u = '/api/playlist/add?url='+encodeURIComponent(url);
-      if (NEEDS_KEY) u += '&key='+encodeURIComponent(dashKey());
-      const r = await fetch(u, {method:'POST'});
-      const j = await r.json().catch(()=>({}));
-      if (r.ok && j.ok) { row.done(j.name); inp.value=''; }
-      else row.fail(j.error || ('HTTP '+r.status));
-    } catch(e) { row.fail('network error'); }
-    btn.disabled = false; btn.textContent = 'Add';
-    loadPlaylist();
-  }
-  $('urlAdd').addEventListener('click', addViaUrl);
-  $('urlInput').addEventListener('keydown', e => { if (e.key === 'Enter') addViaUrl(); });
-  $('selClear').addEventListener('click', () => { selected.clear(); refreshSelbar(); });
-  $('selDelete').addEventListener('click', async () => {
-    if (!selected.size || !confirm('Delete '+selected.size+' selected song(s)?')) return;
-    const names = [...selected];
-    selected.clear(); refreshSelbar();
-    for (const name of names) {
-      let url = '/api/playlist?name='+encodeURIComponent(name);
-      if (NEEDS_KEY) url += '&key='+encodeURIComponent(dashKey());
-      try { await fetch(url, {method:'DELETE'}); } catch(e) {}
-    }
-    loadPlaylist();
-  });
-  function upRow(name){
-    const div = document.createElement('div');
-    div.className = 'up-row';
-    div.innerHTML = '<div style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(name)+'</div><div class="bar"><i></i></div><div class="st">uploading…</div>';
-    $('uploads').appendChild(div);
-    return {
-      done: okName => { div.querySelector('.bar i').style.width='100%'; const st=div.querySelector('.st'); st.textContent = okName ? 'done ✓' : 'failed'; st.className='st '+(okName?'ok':'bad'); setTimeout(()=>div.remove(), 4000); },
-      fail: msg => { const st=div.querySelector('.st'); st.textContent = msg || 'failed'; st.className='st bad'; setTimeout(()=>div.remove(), 5000); }
-    };
-  }
-  async function uploadFiles(files){
-    for (const f of files) {
-      const row = upRow(f.name);
-      try {
-        let url = '/api/playlist/upload?filename='+encodeURIComponent(f.name);
-        if (NEEDS_KEY) url += '&key='+encodeURIComponent(dashKey());
-        const r = await fetch(url, {method:'POST', body:f});
-        const j = await r.json().catch(()=>({}));
-        if (r.ok && j.ok) row.done(j.name); else row.fail(j.error || ('HTTP '+r.status));
-      } catch(e) { row.fail('network error'); }
-    }
-    loadPlaylist();
-  }
-  const drop = $('drop'), fi = $('fileInput');
-  drop.addEventListener('click', () => fi.click());
-  fi.addEventListener('change', () => { if (fi.files.length) uploadFiles(fi.files); fi.value=''; });
-  ['dragover','dragenter'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
-  ['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
-  drop.addEventListener('drop', e => { const fs = e.dataTransfer && e.dataTransfer.files; if (fs && fs.length) uploadFiles(fs); });
-  tick(); tickLogs(); loadPlaylist();
-  setInterval(tick, 5000); setInterval(tickLogs, 3000); setInterval(loadPlaylist, 15000);
+  tick(); tickLogs();
+  setInterval(tick, 5000); setInterval(tickLogs, 3000);
 </script>
 </body>
 </html>`
@@ -560,58 +427,6 @@ export function handleRequest(req: any, res: any): boolean {
   }
   if (url === "/api/logs") {
     json(res, 200, recentLogs(80))
-    return true
-  }
-  if (url === "/api/playlist" && req.method === "GET") {
-    json(res, 200, { tracks: listTracks() })
-    return true
-  }
-  if (url === "/api/playlist" && req.method === "DELETE") {
-    if (!checkKey(q.get("key"))) { json(res, 403, { ok: false, error: "bad key" }); return true }
-    const ok = deleteTrack(q.get("name") || "")
-    json(res, ok ? 200 : 404, { ok, error: ok ? undefined : "not found" })
-    return true
-  }
-  if (url === "/api/playlist/upload" && req.method === "POST") {
-    if (!checkKey(q.get("key"))) { json(res, 403, { ok: false, error: "bad key" }); return true }
-    const filename = q.get("filename") || "upload"
-    const chunks: Buffer[] = []
-    let size = 0
-    let failed = false
-    req.on("data", (c: Buffer) => {
-      if (failed) return
-      size += c.length
-      if (size > 105 * 1024 * 1024) {
-        failed = true
-        try { req.destroy() } catch {}
-        json(res, 413, { ok: false, error: "file too big (100MB max)" })
-        return
-      }
-      chunks.push(c)
-    })
-    req.on("end", async () => {
-      if (failed) return
-      try {
-        const r = await saveUpload(filename, Buffer.concat(chunks))
-        json(res, r.ok ? 200 : 400, r)
-      } catch (err) {
-        logerr("playlist", "upload failed:", (err as Error).message?.slice(0, 80))
-        json(res, 500, { ok: false, error: "server error" })
-      }
-    })
-    req.on("error", () => {
-      if (!failed) { try { json(res, 500, { ok: false, error: "upload interrupted" }) } catch {} }
-    })
-    return true
-  }
-  if (url === "/api/playlist/add" && req.method === "POST") {
-    if (!checkKey(q.get("key"))) { json(res, 403, { ok: false, error: "bad key" }); return true }
-    const link = q.get("url") || ""
-    // Respond after the download finishes (could take a bit).
-    addFromUrl(link).then(
-      (r) => json(res, r.ok ? 200 : 400, r),
-      (err) => json(res, 500, { ok: false, error: "server error" })
-    )
     return true
   }
   if (url === "/" || url === "/index.html") {

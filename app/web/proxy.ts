@@ -25,7 +25,14 @@ interface ProxyEntry {
   url: string
   /** Masked for logs, e.g. "http://***@1.2.3.4:8080" */
   masked: string
+  /** Consecutive failures. At MAX_FAILURES the proxy is cooled down. */
+  failures: number
+  /** Timestamp until which this proxy is skipped (0 = healthy). */
+  badUntil: number
 }
+
+const MAX_FAILURES = 3
+const COOLDOWN_MS = 10 * 60 * 1000 // 10 minutes
 
 function maskProxy(url: string): string {
   try {
@@ -43,7 +50,7 @@ function loadProxies(): ProxyEntry[] {
   list.push(...multi)
   const single = process.env.HTTP_PROXY || process.env.HTTPS_PROXY || process.env.http_proxy || process.env.https_proxy
   if (single && !list.includes(single)) list.push(single.trim())
-  return list.map((url) => ({ url, masked: maskProxy(url) }))
+  return list.map((url) => ({ url, masked: maskProxy(url), failures: 0, badUntil: 0 }))
 }
 
 let proxies: ProxyEntry[] = loadProxies()
@@ -52,16 +59,51 @@ let proxyEnabled = proxies.length > 0
 
 /** Reload from env (call after env changes, or periodically). */
 export function reloadProxies(): void {
-  proxies = loadProxies()
-  if (proxyIndex >= proxies.length) proxyIndex = 0
-  if (proxies.length > 0 && !proxyEnabled) {
-    // stay disabled until user turns it on
+  const fresh = loadProxies()
+  // Preserve health stats for proxies that still exist.
+  for (const f of fresh) {
+    const old = proxies.find((p) => p.url === f.url)
+    if (old) { f.failures = old.failures; f.badUntil = old.badUntil }
   }
+  proxies = fresh
+  if (proxyIndex >= proxies.length) proxyIndex = 0
   logline("proxy", `loaded ${proxies.length} prox${proxies.length === 1 ? "y" : "ies"}`)
+}
+
+/** Is this proxy currently usable? (cooldown expired) */
+function isHealthy(p: ProxyEntry): boolean {
+  if (p.badUntil && Date.now() < p.badUntil) return false
+  if (p.badUntil && Date.now() >= p.badUntil) { p.badUntil = 0; p.failures = 0 }
+  return true
+}
+
+/** Number of currently healthy proxies. */
+export function healthyProxyCount(): number {
+  return proxies.filter(isHealthy).length
 }
 
 export function proxyCount(): number {
   return proxies.length
+}
+
+/** Health summary for the proxy command: "3/10 healthy". */
+export function proxyHealth(): string {
+  return `${healthyProxyCount()}/${proxies.length} healthy`
+}
+
+/** Record a failure. After MAX_FAILURES consecutive failures, cool down. */
+function markFailure(p: ProxyEntry): void {
+  p.failures++
+  if (p.failures >= MAX_FAILURES) {
+    p.badUntil = Date.now() + COOLDOWN_MS
+    logerr("proxy", `${p.masked} failed ${p.failures}x — cooling down 10min`)
+  }
+}
+
+/** Record a success — resets the failure counter. */
+function markSuccess(p: ProxyEntry): void {
+  if (p.failures > 0) p.failures = 0
+  if (p.badUntil && Date.now() >= p.badUntil) p.badUntil = 0
 }
 
 export function isProxyEnabled(): boolean {
@@ -73,13 +115,27 @@ export function currentProxy(): ProxyEntry | null {
   return proxies[proxyIndex % proxies.length]
 }
 
-/** Switch to the next proxy. Returns the new proxy (or null if none). */
+/**
+ * Switch to the next HEALTHY proxy (skips cooled-down ones).
+ * Returns the new proxy (or null if none).
+ */
 export function nextProxy(): ProxyEntry | null {
   if (proxies.length === 0) return null
+  for (let i = 0; i < proxies.length; i++) {
+    proxyIndex = (proxyIndex + 1) % proxies.length
+    const p = proxies[proxyIndex]
+    if (isHealthy(p)) {
+      proxyEnabled = true
+      logline("proxy", `switched to ${p.masked} (${proxyIndex + 1}/${proxies.length})`)
+      return p
+    }
+  }
+  // All proxies cooling down — use the least-bad one anyway.
   proxyIndex = (proxyIndex + 1) % proxies.length
+  const p = proxies[proxyIndex]
+  p.badUntil = 0; p.failures = 0
   proxyEnabled = true
-  const p = currentProxy()
-  logline("proxy", `switched to ${p?.masked} (${proxyIndex + 1}/${proxies.length})`)
+  logline("proxy", `all cooling down — retrying ${p.masked} anyway`)
   return p
 }
 
@@ -106,30 +162,46 @@ export async function proxyDispatcher(): Promise<any> {
 
 /**
  * fetch() wrapper that routes through the current proxy when enabled.
- * Automatically rotates to the next proxy on 403/429 (IP likely burned).
+ * Tries EVERY healthy proxy in turn: on 403/429/5xx or connection error
+ * it marks the proxy failed and rotates. Only throws after all proxies
+ * (and a final direct attempt) have failed.
  */
 export async function proxiedFetch(url: string, init: any = {}): Promise<any> {
-  const dispatcher = await proxyDispatcher()
-  try {
-    const res = await fetch(url, { ...init, dispatcher })
-    // If the proxy's IP is burned (403/429), try the next proxy once.
-    if ((res.status === 403 || res.status === 429) && proxies.length > 1) {
-      logline("proxy", `got ${res.status}, rotating IP…`)
-      nextProxy()
-      const d2 = await proxyDispatcher()
-      return fetch(url, { ...init, dispatcher: d2 })
+  const tried = new Set<number>()
+  const maxAttempts = Math.max(1, proxies.length)
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const p = currentProxy()
+    if (!p) {
+      // No proxies (or disabled) — direct fetch.
+      return fetch(url, init)
     }
-    return res
-  } catch (err: any) {
-    // Connection through proxy failed — try next proxy once.
-    if (proxies.length > 1) {
-      logline("proxy", `proxy error, rotating IP… (${(err.message || err).slice(0, 60)})`)
+    const idx = proxyIndex % proxies.length
+    if (tried.has(idx)) break
+    tried.add(idx)
+
+    const dispatcher = await proxyDispatcher()
+    try {
+      const res = await fetch(url, { ...init, dispatcher })
+      if (res.ok || (res.status < 500 && res.status !== 403 && res.status !== 429)) {
+        markSuccess(p)
+        return res
+      }
+      // Burned IP (403/429) or server error (5xx) — rotate.
+      markFailure(p)
+      logline("proxy", `got ${res.status} via ${p.masked}, rotating… (${attempt + 1}/${maxAttempts})`)
+      try { await res.arrayBuffer().catch(() => {}) } catch {}
       nextProxy()
-      const d2 = await proxyDispatcher()
-      return fetch(url, { ...init, dispatcher: d2 })
+    } catch (err: any) {
+      markFailure(p)
+      logline("proxy", `proxy error via ${p.masked}, rotating… (${(err.message || err).slice(0, 50)})`)
+      nextProxy()
     }
-    throw err
   }
+  // Every proxy failed — one last direct attempt so a bad proxy list
+  // can't take the whole bot down.
+  logerr("proxy", "all proxies failed — trying direct")
+  return fetch(url, init)
 }
 
 /** Check what outbound IP the world sees (via api.ipify.org). */
