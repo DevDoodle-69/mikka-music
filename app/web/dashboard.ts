@@ -95,6 +95,7 @@ export function getStatus(): any {
     history,
     volume,
     loopMode,
+    ownerLinked: !!process.env.OWNER_TOKEN,
     timestamp: Date.now(),
   }
 }
@@ -129,6 +130,11 @@ const PAGE = `<!DOCTYPE html>
     backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
     background: rgba(11,8,23,.78); border-bottom: 1px solid var(--line);
   }
+  .warnbar { display: none; align-items: center; gap: 10px; margin: 14px 0 0; padding: 12px 16px; border-radius: 14px;
+    background: rgba(255,180,80,.07); border: 1px solid rgba(255,180,80,.3); font-size: 13px; color: #ffd9a0;
+    animation: cardIn .4s ease; }
+  .warnbar.show { display: flex; }
+  .warnbar svg { width: 18px; height: 18px; fill: #ffb450; flex-shrink: 0; }
   .topbar-in { max-width: 860px; margin: 0 auto; padding: 14px 20px;
     display: flex; align-items: center; gap: 14px; }
   .avatar-ring { position: relative; flex-shrink: 0; }
@@ -305,6 +311,7 @@ const PAGE = `<!DOCTYPE html>
 </div></div>
 
 <div class="wrap">
+  <div class="warnbar" id="warnbar"><svg viewBox="0 0 24 24"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg><span>Owner account not linked — set <b>OWNER_TOKEN</b> in Render env vars so sleep can pull your account out of voice too.</span></div>
   <div class="grid">
     <div class="card wide">
       <div class="card-head">
@@ -392,6 +399,7 @@ const PAGE = `<!DOCTYPE html>
   async function tick(){
     try {
       const d = await (await fetch('/api/status',{cache:'no-store'})).json();
+      $('warnbar').classList.toggle('show', d.online && !d.ownerLinked);
       const pill = $('statusPill');
       pill.textContent = d.online ? 'LIVE' : 'OFFLINE';
       pill.className = 'pill' + (d.online ? ' on' : '');

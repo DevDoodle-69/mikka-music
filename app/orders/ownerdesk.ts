@@ -38,6 +38,22 @@ async function findOwnerVoiceGuild(client: any, ownerId: string): Promise<{ guil
   return null
 }
 
+/** Fallback: send the native OP 4 voice-state packet (what the official
+ *  client sends when you click disconnect). Used if the REST call fails. */
+function gatewayLeaveVoice(ownerClient: any, guildId: string): boolean {
+  try {
+    const shards = ownerClient?.ws?.shards
+    const shard = shards?.get ? (shards.get(0) || [...shards.values()][0]) : null
+    if (!shard || typeof shard.send !== "function") return false
+    shard.send({ op: 4, d: { guild_id: guildId, channel_id: null, self_mute: false, self_deaf: false } })
+    logline("sleep", "sent gateway OP 4 voice leave")
+    return true
+  } catch (err) {
+    logerr("sleep", "gateway leave failed:", (err as Error).message?.slice(0, 60))
+    return false
+  }
+}
+
 async function handleOwnerSleep(msg: Message, args: string[]): Promise<void> {
   const client: any = msg.client
   const ownerId: string = client.user?.id
@@ -101,12 +117,14 @@ async function handleOwnerSleep(msg: Message, args: string[]): Promise<void> {
     }
     // 2. Disconnect the OWNER's account from wherever they're sitting.
     //    Prefer their actual voice guild over the message guild.
+    //    REST first, native gateway packet as fallback.
     let targetGuildId: string = guild.id
     try {
       const found = await findOwnerVoiceGuild(client, ownerId)
       if (found) targetGuildId = found.guild.id
     } catch {}
-    const ok = await disconnectOwnerFromVoice(targetGuildId)
+    let ok = await disconnectOwnerFromVoice(targetGuildId)
+    if (!ok) ok = gatewayLeaveVoice(client, targetGuildId)
     // 3. Robot leaves too.
     if (queue) {
       markIntentionalLeave(guild.id)

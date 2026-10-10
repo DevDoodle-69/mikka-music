@@ -437,7 +437,7 @@ async function handleSleep(msg: Message, args: string[], guild: Guild | undefine
     queues.delete(guild.id)
     saveState()
   })
-  await replySoft(msg, `sleep timer set for **${label}**~ I'll fade out, say goodnight, and we'll both leave voice`)
+  await replySoft(msg, `sleep timer set for **${label}**~ I'll fade out, say goodnight, and we'll both leave voice` + (process.env.OWNER_TOKEN ? "" : "\n**heads up:** OWNER_TOKEN isn't set on the host, so I can't pull *your* account out of voice — only I'll leave. Set it in Render env vars to fix that."))
 }
 
 async function handleStay(msg: Message): Promise<void> {
