@@ -500,19 +500,53 @@ async function handleDiag(msg: Message): Promise<void> {
 }
 
 async function handleProxy(msg: Message, args: string[]): Promise<void> {
-  const { proxyCount, proxyHealth, isProxyEnabled, currentProxy, nextProxy, setProxyEnabled, checkOutboundIp } =
+  const { proxyCount, proxyHealth, proxyList, currentProxyIndex, isProxyEnabled, nextProxy, setProxyEnabled, checkOutboundIp, testProxyAt } =
     await import("../web/proxy")
 
   const sub = (args[0] || "").toLowerCase()
 
   if (sub === "next") {
+    const count = proxyCount()
+    if (count === 0) {
+      await msg.channel.send("no proxies configured~ set PROXY_LIST on Render first")
+      return
+    }
+    if (count === 1) {
+      await msg.channel.send("only **1** proxy configured — nothing to switch to~ add more to PROXY_LIST (comma-separated) to rotate IPs")
+      return
+    }
+    const fromIdx = currentProxyIndex()
     const p = nextProxy()
     if (!p) {
       await msg.channel.send("no proxies configured~ set PROXY_LIST on Render first")
       return
     }
+    const toIdx = currentProxyIndex()
     const ip = await checkOutboundIp()
-    await msg.channel.send(`switched IP~ now coming from **${ip}** via ${p.masked}`)
+    await msg.channel.send(
+      `switched proxy **#${fromIdx} → #${toIdx}**~\n` +
+      `now via ${p.masked}\n` +
+      `outbound IP: **${ip}**`
+    )
+    return
+  }
+  if (sub === "test") {
+    const count = proxyCount()
+    if (count === 0) {
+      await msg.channel.send("no proxies configured~ set PROXY_LIST on Render first")
+      return
+    }
+    const statusMsg = await msg.channel.send(`testing **${count}** proxies~ one sec…`)
+    const lines: string[] = []
+    for (let i = 0; i < count; i++) {
+      const r = await testProxyAt(i)
+      lines.push(`**#${i + 1}** ${r.ok ? "✅" : "❌"} ${r.ok ? r.ip : r.ip} (${r.ms}ms)`)
+    }
+    const okCount = lines.filter((l) => l.includes("✅")).length
+    await statusMsg.edit(
+      `proxy test — **${okCount}/${count} working**:\n` + lines.slice(0, 15).join("\n") +
+      (count > 15 ? `\n…${count - 15} more` : "")
+    )
     return
   }
   if (sub === "off") {
@@ -530,19 +564,24 @@ async function handleProxy(msg: Message, args: string[]): Promise<void> {
     await msg.channel.send(`proxy on~ outbound IP is **${ip}**`)
     return
   }
-  // Status
+  // Status — per-proxy list with health.
   const count = proxyCount()
   if (count === 0) {
     await msg.channel.send("no proxies set~ add PROXY_LIST in Render env vars to enable IP switching")
     return
   }
-  const cur = currentProxy()
+  const list = proxyList()
   const ip = await checkOutboundIp()
+  const rows = list.slice(0, 12).map((p) =>
+    `**#${p.index}** ${p.current ? "▶" : "·"} ${p.healthy ? "✅" : "🧊"} \`${p.masked}\``
+  ).join("\n")
+  const more = count > 12 ? `\n…${count - 12} more` : ""
   await msg.channel.send(
     `proxy **${isProxyEnabled() ? "ON" : "OFF"}** — ${proxyHealth()}\n` +
-    `current: ${cur?.masked || "none"}\n` +
     `outbound IP: **${ip}**\n` +
-    `bad ones auto-cool down 10min · \`proxy next\` to switch IP, \`proxy off\` to go direct`
+    rows + more + `\n` +
+    `✅ healthy · 🧊 cooling down · ▶ current\n` +
+    `\`proxy next\` switch · \`proxy test\` check all · \`proxy off\` direct`
   )
 }
 

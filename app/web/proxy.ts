@@ -50,7 +50,18 @@ function loadProxies(): ProxyEntry[] {
   list.push(...multi)
   const single = process.env.HTTP_PROXY || process.env.HTTPS_PROXY || process.env.http_proxy || process.env.https_proxy
   if (single && !list.includes(single)) list.push(single.trim())
-  return list.map((url) => ({ url, masked: maskProxy(url), failures: 0, badUntil: 0 }))
+  // Dedupe — the same proxy listed twice makes rotation look broken.
+  const seen = new Set<string>()
+  const unique = list.filter((u) => {
+    const key = u.replace(/:\/\/[^@]+@/, "://") // ignore credentials when deduping
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+  if (unique.length !== list.length) {
+    logline("proxy", `removed ${list.length - unique.length} duplicate proxies`)
+  }
+  return unique.map((url) => ({ url, masked: maskProxy(url), failures: 0, badUntil: 0 }))
 }
 
 let proxies: ProxyEntry[] = loadProxies()
@@ -80,6 +91,23 @@ function isHealthy(p: ProxyEntry): boolean {
 /** Number of currently healthy proxies. */
 export function healthyProxyCount(): number {
   return proxies.filter(isHealthy).length
+}
+
+/** Full list with 1-based index and health — for the status command. */
+export function proxyList(): Array<{ index: number; masked: string; healthy: boolean; current: boolean; failures: number }> {
+  return proxies.map((p, i) => ({
+    index: i + 1,
+    masked: p.masked,
+    healthy: isHealthy(p),
+    current: isProxyEnabled() && (proxyIndex % proxies.length) === i,
+    failures: p.failures,
+  }))
+}
+
+/** Current proxy's 1-based index (0 if none). */
+export function currentProxyIndex(): number {
+  if (!isProxyEnabled() || proxies.length === 0) return 0
+  return (proxyIndex % proxies.length) + 1
 }
 
 export function proxyCount(): number {
@@ -212,5 +240,39 @@ export async function checkOutboundIp(): Promise<string> {
     return j.ip || "unknown"
   } catch {
     return "unknown"
+  }
+}
+
+/**
+ * Test ONE specific proxy (by 0-based index): route an IP check through it
+ * and report the outbound IP. Does not change the current proxy.
+ */
+export async function testProxyAt(index: number): Promise<{ ok: boolean; ip: string; ms: number }> {
+  const p = proxies[index]
+  if (!p) return { ok: false, ip: "no such proxy", ms: 0 }
+  const start = Date.now()
+  try {
+    const { ProxyAgent } = await import("undici")
+    const dispatcher = new ProxyAgent(p.url)
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), 15000)
+    try {
+      const res: any = await fetch("https://api.ipify.org?format=json", {
+        signal: ctrl.signal,
+        dispatcher,
+        headers: { "User-Agent": "Mozilla/5.0" },
+      })
+      clearTimeout(timer)
+      if (!res.ok) return { ok: false, ip: `HTTP ${res.status}`, ms: Date.now() - start }
+      const j = await res.json()
+      markSuccess(p)
+      return { ok: true, ip: j.ip || "unknown", ms: Date.now() - start }
+    } catch (err: any) {
+      clearTimeout(timer)
+      markFailure(p)
+      return { ok: false, ip: (err.message || "error").slice(0, 50), ms: Date.now() - start }
+    }
+  } catch (err: any) {
+    return { ok: false, ip: (err.message || "error").slice(0, 50), ms: Date.now() - start }
   }
 }
