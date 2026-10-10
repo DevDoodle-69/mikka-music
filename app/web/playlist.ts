@@ -138,6 +138,7 @@ export async function saveUpload(rawName: string, data: Buffer): Promise<{ ok: b
   }
   setIndexEntry(name, null) // dashboard upload: no source URL to re-fetch from
   logline("playlist", `uploaded "${name}" (${(data.length / 1048576).toFixed(1)}MB)`)
+  scheduleBackup()
   return { ok: true, name }
 }
 
@@ -186,6 +187,7 @@ export async function addFromUrl(url: string, preferName?: string): Promise<{ ok
     try { fs.unlinkSync(tmp) } catch {}
     setIndexEntry(name, u)
     logline("playlist", `added "${name}" from url (${(st.size / 1048576).toFixed(1)}MB)`)
+    scheduleBackup()
     return { ok: true, name }
   } catch (err) {
     if (tmp) { try { fs.unlinkSync(tmp) } catch {} }
@@ -202,9 +204,17 @@ export async function ensureTrack(name: string): Promise<string | null> {
   const direct = trackPath(name)
   if (direct) return direct
   const safe = sanitizeName(name)
-  if (!safe) return null
+  if (!safe) {
+    logerr("playlist", `ensureTrack: sanitize failed for "${name}"`)
+    return null
+  }
   const entry = readIndex()[safe]
-  if (!entry?.sourceUrl) return null
+  if (!entry?.sourceUrl) {
+    let files: string[] = []
+    try { files = fs.readdirSync(DIR) } catch {}
+    logerr("playlist", `ensureTrack miss: name="${name}" safe="${safe}" dir="${DIR}" files=[${files.slice(0, 8).join(", ")}]`)
+    return null
+  }
   logline("playlist", `file gone, re-fetching "${safe}" from source`)
   const r = await addFromUrl(entry.sourceUrl, safe)
   if (!r.ok || !r.name) return null
@@ -218,6 +228,115 @@ export function deleteTrack(name: string): boolean {
     fs.unlinkSync(p)
     dropIndexEntry(path.basename(p))
     logline("playlist", `deleted "${name}"`)
+    scheduleBackup()
     return true
   } catch { return false }
+}
+
+/** Debug snapshot: dir, files on disk, and per-track resolution. */
+export function debugPlaylist(): { dir: string; files: string[]; index: IndexData; resolved: Array<{ name: string; path: string | null }> } {
+  ensureDir()
+  let files: string[] = []
+  try { files = fs.readdirSync(DIR) } catch {}
+  const idx = readIndex()
+  const tracks = listTracks()
+  return {
+    dir: DIR,
+    files,
+    index: idx,
+    resolved: tracks.map((t) => ({ name: t.name, path: trackPath(t.name) })),
+  }
+}
+
+// ---------------------------------------------------------------------------
+// DM backup / restore — makes My Playlist survive Render redeploys.
+//
+// Render's free disk wipes on every deploy, so the playlist index (track
+// names + source URLs) is mirrored into a marker message in the owner's DM.
+// On startup the bot reads it back and re-downloads anything missing.
+// ---------------------------------------------------------------------------
+
+const BACKUP_MARKER = "MIKKA-PLAYLIST-BACKUP-v1"
+
+let backupClient: any = null
+let backupOwnerId: string = ""
+let backupTimer: NodeJS.Timeout | null = null
+
+export function setPlaylistBackup(client: any, ownerId: string): void {
+  backupClient = client
+  backupOwnerId = ownerId
+}
+
+async function findBackupMessage(dm: any, client: any): Promise<any | null> {
+  try {
+    const msgs = await dm.messages.fetch({ limit: 30 })
+    const list = msgs.values ? [...msgs.values()] : msgs
+    for (const m of list) {
+      if (m?.author?.id === client?.user?.id && typeof m.content === "string" && m.content.startsWith(BACKUP_MARKER)) {
+        return m
+      }
+    }
+  } catch {}
+  return null
+}
+
+/** Debounced: backs up at most once per 15s, always trailing. */
+export function scheduleBackup(): void {
+  if (!backupClient || !backupOwnerId) return
+  if (backupTimer) return
+  backupTimer = setTimeout(async () => {
+    backupTimer = null
+    try {
+      const idx = readIndex()
+      const tracks = Object.entries(idx).map(([name, e]) => ({ name, url: e.sourceUrl }))
+      const payload = `${BACKUP_MARKER}\n\`\`\`json\n${JSON.stringify({ tracks }, null, 1)}\n\`\`\``
+      const user = await backupClient.users.fetch(backupOwnerId)
+      const dm = user.dmChannel || (await user.createDM())
+      const existing = await findBackupMessage(dm, backupClient)
+      if (existing) await existing.edit(payload)
+      else await dm.send(payload)
+      logline("playlist", `index backed up (${tracks.length} tracks)`)
+    } catch (err) {
+      logerr("playlist", "backup failed:", (err as Error).message?.slice(0, 60))
+    }
+  }, 15000)
+}
+
+/** On startup: restore index from the DM backup, re-download what's missing. Returns restored count. */
+export async function restorePlaylist(client: any, ownerId: string): Promise<number> {
+  try {
+    const user = await client.users.fetch(ownerId)
+    const dm = user.dmChannel || (await user.createDM())
+    const found = await findBackupMessage(dm, client)
+    if (!found) return 0
+    const jsonStr = found.content.slice(BACKUP_MARKER.length).replace(/```json|```/g, "").trim()
+    const data = JSON.parse(jsonStr)
+    if (!data || !Array.isArray(data.tracks)) return 0
+    const idx = readIndex()
+    let added = 0
+    const missing: Array<{ name: string; url: string }> = []
+    for (const t of data.tracks) {
+      const safe = sanitizeName(t?.name || "")
+      if (!safe || idx[safe]) continue
+      idx[safe] = { sourceUrl: t.url || null, addedAt: Date.now() }
+      added++
+      if (t.url && !trackPath(safe)) missing.push({ name: safe, url: t.url })
+    }
+    if (added > 0) writeIndex(idx)
+    if (missing.length > 0) {
+      logline("playlist", `restored ${added} tracks from backup — re-downloading ${missing.length} in background`)
+      ;(async () => {
+        for (const m of missing) {
+          try { await addFromUrl(m.url, m.name) } catch {}
+        }
+        logline("playlist", "background restore done")
+      })()
+    } else if (added > 0) {
+      logline("playlist", `restored ${added} tracks from backup`)
+    }
+    return added
+  } catch (err) {
+    logerr("playlist", "restore failed:", (err as Error).message?.slice(0, 60))
+    return 0
+  }
 }

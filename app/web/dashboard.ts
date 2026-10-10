@@ -253,8 +253,35 @@ const PAGE = `<!DOCTYPE html>
   .btn:hover { transform: translateY(-1px); box-shadow: 0 8px 26px rgba(255,122,184,.45); }
   .btn:active { transform: translateY(0); }
   .btn:disabled { opacity: .55; cursor: default; transform: none; }
-  .footer { text-align: center; color: var(--faint); font-size: 12px; margin-top: 26px; letter-spacing: .4px; }
-  .footer b { color: var(--pink); }
+  .footer { text-align: center; color: var(--faint); font-size: 12px; margin-top: 26px; letter-spacing: .4px; display: flex; align-items: center; justify-content: center; gap: 6px; }
+  .footer svg { width: 13px; height: 13px; fill: var(--pink); animation: heartbeat 1.6s ease-in-out infinite; }
+  @keyframes heartbeat { 0%,100% { transform: scale(1); } 12% { transform: scale(1.25); } 24% { transform: scale(1); } }
+  .card { animation: cardIn .5s cubic-bezier(.2,.7,.3,1) backwards; }
+  .grid .card:nth-child(1) { animation-delay: .02s; } .grid .card:nth-child(2) { animation-delay: .08s; }
+  .grid .card:nth-child(3) { animation-delay: .14s; } .grid .card:nth-child(4) { animation-delay: .2s; }
+  .grid .card:nth-child(5) { animation-delay: .26s; }
+  @keyframes cardIn { from { opacity: 0; transform: translateY(16px) scale(.985); } }
+  .track { transition: background .18s, transform .18s; border-radius: 10px; padding-left: 8px; padding-right: 8px; margin: 0 -8px; }
+  .track:hover { background: rgba(167,139,250,.06); transform: translateX(3px); }
+  .track.sel { background: rgba(255,122,184,.08); }
+  .tick { width: 20px; height: 20px; border-radius: 7px; border: 1.5px solid var(--line); background: var(--inset);
+    cursor: pointer; flex-shrink: 0; display: flex; align-items: center; justify-content: center; transition: all .18s; padding: 0; }
+  .tick svg { width: 12px; height: 12px; fill: #0b0817; opacity: 0; transform: scale(.5); transition: all .18s; }
+  .tick.on { background: linear-gradient(135deg, var(--pink), var(--violet)); border-color: transparent; }
+  .tick.on svg { opacity: 1; transform: scale(1); }
+  .selbar { display: none; align-items: center; gap: 10px; margin: 12px 0 2px; padding: 10px 14px;
+    background: rgba(255,122,184,.07); border: 1px solid rgba(255,122,184,.25); border-radius: 12px;
+    font-size: 13px; animation: cardIn .3s ease; }
+  .selbar.show { display: flex; }
+  .selbar .btn { padding: 8px 16px; font-size: 12.5px; }
+  .selbar .btn.ghost { background: transparent; color: var(--dim); border: 1px solid var(--line); box-shadow: none; }
+  .up-row .bar i { position: relative; overflow: hidden; }
+  .up-row .bar i::after { content: ''; position: absolute; inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,.45), transparent);
+    animation: shimmer 1.2s infinite; }
+  @keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+  .vinfo { display: inline-flex; align-items: center; gap: 5px; }
+  .vinfo svg { width: 13px; height: 13px; fill: var(--green); animation: pulse 2s infinite; }
   @media (max-width: 640px) {
     .grid { grid-template-columns: 1fr; }
     .stats { grid-template-columns: repeat(2, 1fr); }
@@ -303,6 +330,12 @@ const PAGE = `<!DOCTYPE html>
         <input id="urlInput" type="url" placeholder="…or paste a song link (YouTube / Spotify / mp3)" autocomplete="off">
         <button id="urlAdd" class="btn">Add</button>
       </div>
+      <div class="selbar" id="selbar">
+        <span id="selCount">0 selected</span>
+        <span style="flex:1"></span>
+        <button class="btn ghost" id="selClear">Clear</button>
+        <button class="btn" id="selDelete">Delete selected</button>
+      </div>
       <div id="playlist" style="margin-top:6px"></div>
       <div class="hint">Then in Discord: <code>@Mikka playlist play all</code> shuffles everything, <code>@Mikka playlist play 10</code> shuffles 10, <code>@Mikka playlist add &lt;link&gt;</code> saves a link.</div>
     </div>
@@ -336,7 +369,7 @@ const PAGE = `<!DOCTYPE html>
       <div class="logs" id="logs"><div class="lg"><span class="lmsg" style="color:var(--dim)">connecting to log stream…</span></div></div>
     </div>
   </div>
-  <div class="footer">made with <b>♥</b> by <b>Mikka~</b> · your self-hosted jukebox</div>
+  <div class="footer">made with <svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg> by <b style="color:var(--pink)">Mikka~</b> · your self-hosted jukebox</div>
 </div>
 <script>
   const NEEDS_KEY = __NEEDS_KEY__;
@@ -347,6 +380,10 @@ const PAGE = `<!DOCTYPE html>
   const musicSvg = '<svg viewBox="0 0 24 24"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>';
   const clockSvg = '<svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 10.59l-4.24 4.25-.71-.71L11.59 13H11V7h2v6.59z"/></svg>';
   const trashSvg = '<svg viewBox="0 0 24 24"><path d="M6 19a2 2 0 002 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>';
+  const checkSvg = '<svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>';
+  const speakerSvg = '<svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3a4.5 4.5 0 00-2.5-4.03v8.05A4.47 4.47 0 0016.5 12z"/></svg>';
+  const prettyName = n => String(n||'').replace(/\.[^.]+$/, '');
+  const selected = new Set();
   function dashKey(){
     let k = sessionStorage.getItem('dashKey') || '';
     if (NEEDS_KEY && !k) { k = prompt('Dashboard key:') || ''; sessionStorage.setItem('dashKey', k); }
@@ -361,7 +398,7 @@ const PAGE = `<!DOCTYPE html>
       $('liveDot').className = 'live-dot' + (d.online ? '' : ' off');
       $('tagline').textContent = d.online ? (d.tag ? d.tag+' · self-hosted jukebox' : 'online · self-hosted jukebox') : "offline — she'll be back";
       if (d.avatar) { $('avatar').src = d.avatar; $('avatar').style.display='block'; $('avatarFb').style.display='none'; }
-      $('voiceInfo').textContent = d.voices.length && d.voices[0].channelName ? '🔊 '+d.voices[0].channelName : '';
+      $('voiceInfo').innerHTML = d.voices.length && d.voices[0].channelName ? '<span class="vinfo">'+speakerSvg+esc(d.voices[0].channelName)+'</span>' : '';
       if (d.playing && d.nowPlaying) {
         const np = d.nowPlaying;
         $('nowPlaying').innerHTML =
@@ -392,18 +429,40 @@ const PAGE = `<!DOCTYPE html>
       const el = $('logs'); el.scrollTop = el.scrollHeight;
     } catch(e) {}
   }
+  function refreshSelbar(){
+    const n = selected.size;
+    $('selbar').classList.toggle('show', n > 0);
+    $('selCount').textContent = n + (n===1 ? ' selected' : ' selected');
+    document.querySelectorAll('#playlist .track').forEach(row => {
+      const on = selected.has(row.getAttribute('data-name'));
+      row.classList.toggle('sel', on);
+      const tick = row.querySelector('.tick');
+      if (tick) tick.classList.toggle('on', on);
+    });
+  }
   async function loadPlaylist(){
     try {
       const j = await (await fetch('/api/playlist',{cache:'no-store'})).json();
       const tracks = j.tracks || [];
+      // drop selections for tracks that no longer exist
+      [...selected].forEach(n => { if (!tracks.some(t => t.name === n)) selected.delete(n); });
       $('plCount').textContent = tracks.length + (tracks.length===1?' song':' songs');
       $('playlist').innerHTML = tracks.length ? tracks.map(t =>
-        '<div class="track"><div class="ticon">'+musicSvg+'</div>' +
-        '<div class="tname">'+esc(t.name)+'</div><div class="tsize">'+fmtMB(t.size)+'</div>' +
-        '<button class="icon-btn" title="Delete" data-name="'+esc(t.name)+'">'+trashSvg+'</button></div>'
+        '<div class="track" data-name="'+esc(t.name)+'">' +
+        '<button class="tick" title="Select">'+checkSvg+'</button>' +
+        '<div class="ticon">'+musicSvg+'</div>' +
+        '<div class="tname" title="'+esc(t.name)+'">'+esc(prettyName(t.name))+'</div><div class="tsize">'+fmtMB(t.size)+'</div>' +
+        '<button class="icon-btn del" title="Delete">'+trashSvg+'</button></div>'
       ).join('') : '<div class="empty">'+musicSvg+'nothing here yet~ upload your first song above</div>';
-      $('playlist').querySelectorAll('.icon-btn').forEach(b =>
-        b.addEventListener('click', () => delTrack(b.getAttribute('data-name'))));
+      $('playlist').querySelectorAll('.track').forEach(row => {
+        const name = row.getAttribute('data-name');
+        row.querySelector('.tick').addEventListener('click', () => {
+          selected.has(name) ? selected.delete(name) : selected.add(name);
+          refreshSelbar();
+        });
+        row.querySelector('.del').addEventListener('click', () => delTrack(name));
+      });
+      refreshSelbar();
     } catch(e) {}
   }
   async function delTrack(name){
@@ -432,6 +491,18 @@ const PAGE = `<!DOCTYPE html>
   }
   $('urlAdd').addEventListener('click', addViaUrl);
   $('urlInput').addEventListener('keydown', e => { if (e.key === 'Enter') addViaUrl(); });
+  $('selClear').addEventListener('click', () => { selected.clear(); refreshSelbar(); });
+  $('selDelete').addEventListener('click', async () => {
+    if (!selected.size || !confirm('Delete '+selected.size+' selected song(s)?')) return;
+    const names = [...selected];
+    selected.clear(); refreshSelbar();
+    for (const name of names) {
+      let url = '/api/playlist?name='+encodeURIComponent(name);
+      if (NEEDS_KEY) url += '&key='+encodeURIComponent(dashKey());
+      try { await fetch(url, {method:'DELETE'}); } catch(e) {}
+    }
+    loadPlaylist();
+  });
   function upRow(name){
     const div = document.createElement('div');
     div.className = 'up-row';

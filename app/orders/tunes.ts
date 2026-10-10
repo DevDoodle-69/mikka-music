@@ -27,18 +27,36 @@ import { listTracks, addFromUrl } from "../web/playlist"
 async function handlePlaylist(msg: Message, args: string[], guild: Guild, voice: VoiceChannel | null, queue: Queue | undefined): Promise<void> {
   const sub = (args[0] || "").toLowerCase()
   if (sub === "add") {
-    const url = args[1]
-    if (!url) {
-      await tellUser(msg, queue, "give me a link~ `@Mikka playlist add <song link>`")
+    const urls = args.slice(1).filter((u) => /^https?:\/\//i.test(u))
+    if (urls.length === 0) {
+      await tellUser(msg, queue, "give me link(s)~ `@Mikka playlist add <song link>` — you can drop several at once")
       return
     }
-    await tellUser(msg, queue, "grabbing that for your playlist~ one sec")
-    const r = await addFromUrl(url)
-    if (r.ok) {
-      await tellUser(msg, queue, `added **${r.name}** to your playlist~ it's ready to shuffle`)
-    } else {
-      await tellUser(msg, queue, `couldn't add that~ ${r.error || "try another link?"}`)
+    await tellUser(msg, queue, `grabbing ${urls.length} for your playlist~ one sec`)
+    let okCount = 0
+    const failed: string[] = []
+    for (const url of urls.slice(0, 10)) {
+      const r = await addFromUrl(url)
+      if (r.ok) okCount++
+      else failed.push(url.slice(0, 40))
     }
+    if (okCount > 0) {
+      await tellUser(msg, queue, `added **${okCount}** to your playlist~ ${failed.length ? `(${failed.length} didn't work)` : "ready to shuffle"}`)
+    } else {
+      await tellUser(msg, queue, `couldn't add those~ ${failed.length ? "check the links?" : ""}`)
+    }
+    return
+  }
+  if (sub === "debug") {
+    const { debugPlaylist } = await import("../web/playlist")
+    const d = debugPlaylist()
+    const linesOut = [
+      `dir: \`${d.dir}\``,
+      `files on disk (${d.files.length}): ${d.files.slice(0, 10).join(", ") || "none"}`,
+      `index entries: ${Object.keys(d.index).length}`,
+      ...d.resolved.slice(0, 10).map((r) => `• ${r.name} → ${r.path ? "OK" : "MISSING"}`),
+    ]
+    await tellUser(msg, queue, linesOut.join("\n"))
     return
   }
   if (sub === "list") {
@@ -55,7 +73,7 @@ async function handlePlaylist(msg: Message, args: string[], guild: Guild, voice:
   if (sub === "play") {
     const tracks = listTracks()
     if (tracks.length === 0) {
-      await tellUser(msg, queue, "nothing uploaded yet~ add songs on the dashboard first, then I'll shuffle them for you")
+      await tellUser(msg, queue, "my playlist is empty on this server~ add songs with `@Mikka playlist add <link>` or upload on the dashboard, then I'll shuffle them")
       return
     }
     const arg = (args[1] || "all").toLowerCase()

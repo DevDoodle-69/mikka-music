@@ -50,6 +50,16 @@ process.on("uncaughtException", (err) => console.error("Uncaught exception:", er
 client.on("ready", async () => {
   console.log("✅ Logged in as", client.user!.tag)
 
+  // Restore My Playlist from the DM backup (survives Render redeploys).
+  try {
+    const { setPlaylistBackup, restorePlaylist } = await import("./web/playlist")
+    setPlaylistBackup(client, config.ownerId)
+    const restored = await restorePlaylist(client, config.ownerId)
+    if (restored > 0) console.log(`🎵 Playlist restored: ${restored} tracks`)
+  } catch (err) {
+    console.error("playlist restore error:", (err as Error).message?.slice(0, 80))
+  }
+
   // Clean up stale temp files from crashes/restarts.
   try {
     const fs = await import("fs")

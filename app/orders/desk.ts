@@ -15,24 +15,28 @@ async function handleMessageCreate(msg: Message): Promise<void> {
 
   // Command styles, split by account:
   // - @mention (@BotName play ...) → the robot's interface. Always on.
-  // - ^ prefix (^play ...) → ONLY when this code runs on the owner's own
-  //   account (self-bot mode). The robot never answers to ^.
+  // - ^ prefix: on the owner's own account it works for everything
+  //   (self-bot mode); on the robot it's reserved for the personal
+  //   sleep command only (^sleep 30sec). The robot ignores ^ otherwise.
   const botId = msg.client.user?.id
   if (!botId) return
   const isOwnerAccount = botId === config.ownerId
   const mentionRe = new RegExp("^<@!?" + botId + ">\\s*")
   const caretRe = /^\^\s*/
   let body: string | null = null
+  let viaCaret = false
   if (mentionRe.test(msg.content)) {
     body = msg.content.replace(mentionRe, "")
-  } else if (isOwnerAccount && caretRe.test(msg.content)) {
+  } else if (caretRe.test(msg.content)) {
     body = msg.content.replace(caretRe, "")
+    viaCaret = true
   }
   if (body === null) return
 
   const args = body.trim().split(/ +/)
   const cmd = args.shift()?.toLowerCase() || ""
   if (!cmd) return
+  if (viaCaret && !isOwnerAccount && cmd !== "sleep") return
 
   const channelName = (msg.channel as any).name || "DM"
   logline("command", `${cmd} · ${msg.author.tag} · ${args.join(" ") || "—"}`)
