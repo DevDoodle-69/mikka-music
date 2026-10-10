@@ -65,6 +65,13 @@ function leaveAllVoiceSessions(exceptGuildId?: string): void {
     try { q.player.removeAllListeners(AudioPlayerStatus.Idle) } catch {}
     try { q.player.stop() } catch {}
   }
+  // Voice chat mode can't survive without its connection — but only kill it
+  // if its own guild's session was actually torn down.
+  try {
+    const { vcChatConnectionLost, vcChatGuildId, isVcChatOn } = require("./vcchat")
+    const vcg = vcChatGuildId()
+    if (isVcChatOn() && vcg && vcg !== exceptGuildId) vcChatConnectionLost()
+  } catch {}
   saveState()
 }
 

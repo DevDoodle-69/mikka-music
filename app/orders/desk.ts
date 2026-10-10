@@ -5,7 +5,7 @@ import config from "../setup"
 import { queues, isConnectionLive, leaveAllVoiceSessions } from "../voice/shelf"
 import { handlePlay, handleAiPlay, handlePlaylist, handleSkip, handleLoop, handleShuffle, handleQueue, handleStop, handleClear, handleVolume } from "./tunes"
 import { handleRadio, handleRadioStats } from "./tuner"
-import { handleTest, handleHelp, handleLeave, handleClearChat, handleClearReactions, handleSync, handleState, handlePanel, handleSilent, handleProxySet, handleSleep, handleStay, handleDiag, handleProxy } from "./handy"
+import { handleTest, handleHelp, handleLeave, handleClearChat, handleClearReactions, handleSync, handleState, handlePanel, handleSilent, handleProxySet, handleSleep, handleStay, handleDiag, handleProxy, handleVc } from "./handy"
 import { replySoft, saySoft } from "../tools/say"
 import { Queue } from "../types"
 
@@ -131,7 +131,7 @@ async function handleMessageCreate(msg: Message): Promise<void> {
     }
   }
 
-  if (!queue && !["help", "state", "test", "leave", "proxyset", "stay", "diag", "proxy"].includes(cmd) && !voice) {
+  if (!queue && !["help", "state", "test", "leave", "proxyset", "stay", "diag", "proxy", "vc"].includes(cmd) && !voice) {
     await replySoft(msg, "join a voice channel first~ I'll follow you in")
     return
   }
@@ -266,6 +266,10 @@ async function handleMessageCreate(msg: Message): Promise<void> {
     }
     case "proxy": {
       await handleProxy(msg, args)
+      return
+    }
+    case "vc": {
+      await handleVc(msg, args, queue, guild?.id)
       return
     }
     case "help": {

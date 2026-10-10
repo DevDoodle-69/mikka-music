@@ -57,6 +57,7 @@ function handleHelp(msg: Message): void {
     "tip: direct .mp3 links play too, and songs crossfade with zero gaps~",
     "**stay** - I'll hold the voice channel when you leave (off when you join elsewhere)",
     "**proxy** [next|on|off] - check or switch my outbound IP",
+    "**vc** [on|off] - talk to me LIVE in voice: I hear you, think, and answer out loud",
     "**clearchat** [number] - tidy up messages",
     "",
     "*join a voice channel first, and I'll follow you in (I take about 10 seconds, gotta look cute)~*",
@@ -499,8 +500,34 @@ async function handleDiag(msg: Message): Promise<void> {
   await replySoft(msg, out.join("\n"))
 }
 
-async function handleProxy(msg: Message, args: string[]): Promise<void> {
-  const { proxyCount, proxyHealth, proxyList, currentProxyIndex, isProxyEnabled, nextProxy, setProxyEnabled, checkOutboundIp, testProxyAt } =
+/**
+ * `@Mikka vc on/off` — real-time voice chat mode.
+ * When on, Mikka listens to the owner's mic in the live voice channel:
+ * speech -> Groq Whisper -> AI brain -> Sarvam TTS -> spoken back.
+ */
+async function handleVc(msg: Message, args: string[], queue: Queue | undefined, guildId: string | undefined): Promise<void> {
+  const { startVcChat, stopVcChat, isVcChatOn } = await import("../voice/vcchat")
+
+  const sub = (args[0] || "").toLowerCase()
+  if (sub === "on") {
+    if (!queue || !guildId) {
+      await msg.channel.send("join a voice channel first~ I'll follow you in, then turn it on")
+      return
+    }
+    const reply = await startVcChat(queue, guildId, config.ownerId)
+    await msg.channel.send(reply)
+    return
+  }
+  if (sub === "off") {
+    await msg.channel.send(stopVcChat())
+    return
+  }
+  await msg.channel.send(
+    `voice chat is **${isVcChatOn() ? "on" : "off"}**~ use \`@Mikka vc on\` to talk to me live, \`@Mikka vc off\` to stop`
+  )
+}
+
+async function handleProxy(msg: Message, args: string[]): Promise<void> {  const { proxyCount, proxyHealth, proxyList, currentProxyIndex, isProxyEnabled, nextProxy, setProxyEnabled, checkOutboundIp, testProxyAt } =
     await import("../web/proxy")
 
   const sub = (args[0] || "").toLowerCase()
@@ -599,5 +626,6 @@ export {
   handleSleep,
   handleStay,
   handleDiag,
-  handleProxy
+  handleProxy,
+  handleVc
 }

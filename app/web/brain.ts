@@ -88,6 +88,25 @@ Reply with ONLY a numbered list of ${n} songs, one per line, in the format "Arti
 }
 
 /**
+ * Voice-chat assistant: the user speaks in a voice call, this is the reply
+ * she'll SAY aloud via TTS. Kept short and conversational — spoken, not read.
+ * Uses the same chatid so she remembers the conversation.
+ */
+export async function voiceChatReply(text: string): Promise<string | null> {
+  const prompt = `You are Mikka, a cute, playful, warm AI voice assistant — like a smart friend on a call. You can answer ANYTHING: questions, advice, chit-chat, jokes, explanations, help with anything. You're talking to Nehal LIVE in a voice call — he will HEAR your reply spoken aloud. Chat naturally like a real person would on a call. Keep it SHORT (1-2 sentences, under 40 words) because it's spoken. Plain conversational words only — no emojis, no markdown, no lists. Never break character, never mention you're an AI model.
+
+He just said: "${text}"`
+  const out = await askBrain(prompt, 25000)
+  if (!out) return null
+  const line = out
+    .replace(/[*_`~#>|]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 400)
+  return line || null
+}
+
+/**
  * Generate a fresh cute message for a moment (now playing, song added...).
  * Falls back to null quickly so the caller can use static lines.
  */
