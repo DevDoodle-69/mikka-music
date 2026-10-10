@@ -418,8 +418,8 @@ async function handleSleep(msg: Message, args: string[], guild: Guild | undefine
   }
   const label = formatSleepDuration(totalMs)
   startSleepMs(guild.id, totalMs, queue, async () => {
-    // Goodnight: stop everything, whisper, disconnect the OWNER's account
-    // from voice too (via OWNER_TOKEN), then remove the bot as well.
+    // Goodnight: stop everything, whisper, then the robot leaves voice.
+    // (Robot-only sleep — the owner's account is completely separate.)
     clearSongTimers(queue)
     try { queue.player.removeAllListeners(AudioPlayerStatus.Idle) } catch {}
     try { queue.player.stop() } catch {}

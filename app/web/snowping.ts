@@ -133,12 +133,28 @@ export async function resolveStream(youtubeUrl: string, timeoutMs = 45000): Prom
     }
   }
   if (!res) {
-    // Snowping blocked/failed — try Invidious before giving up.
-    logerr("mp3", "snowping blocked, trying invidious fallback")
+    // Snowping blocked/failed — try ytmp3 converter, then Invidious.
+    logerr("mp3", "snowping blocked, trying ytmp3 fallback")
+    try {
+      const { scrapeYtmp3 } = await import("./ytmp3")
+      const yt = await scrapeYtmp3(youtubeUrl)
+      logline("mp3", "ytmp3 resolved OK")
+      return {
+        title: yt.title || "Unknown title",
+        duration: "",
+        thumbnail: "",
+        videoUrl: youtubeUrl,
+        streamUrl: yt.downloadUrl,
+        size: "",
+      }
+    } catch (ytErr: any) {
+      logerr("mp3", "ytmp3 failed:", (ytErr.message || ytErr).slice(0, 80))
+    }
+    logerr("mp3", "trying invidious fallback")
     try {
       return await resolveViaInvidious(youtubeUrl)
     } catch (invErr: any) {
-      throw new Error(`all resolvers failed (snowping: ${lastErr?.message?.slice(0, 60)}; invidious: ${(invErr.message || invErr).slice(0, 60)})`)
+      throw new Error(`all resolvers failed (snowping: ${lastErr?.message?.slice(0, 60)}; ytmp3/invidious: ${(invErr.message || invErr).slice(0, 60)})`)
     }
   }
 

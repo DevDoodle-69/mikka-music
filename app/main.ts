@@ -7,8 +7,7 @@ import path from "path"
 import { queues, loadState, saveState } from "./voice/shelf"
 import { playTrack, playStation } from "./voice/jukebox"
 import { setClient, resumeAllMusic, registerVoiceStateUpdateHandler } from "./voice/session"
-import { handleMessageCreate, setOwnerSelfbotActive } from "./orders/desk"
-import { handleOwnerMessageCreate, setOwnerClientOnline } from "./orders/ownerdesk"
+import { handleMessageCreate } from "./orders/desk"
 import { setPlayTrackFunction, setPlayStationFunction } from "./chat/panel"
 import { joinVoiceChannel, createAudioPlayer } from "@discordjs/voice"
 import { Queue } from "./types"
@@ -182,32 +181,6 @@ registerVoiceStateUpdateHandler()
 client.on("messageCreate", handleMessageCreate)
 
 client.login(config.token)
-
-// ---------------------------------------------------------------------------
-// Owner shadow client: when OWNER_TOKEN is set, we also log in as the
-// owner's own account. It only handles its own ^self-commands (currently
-// just ^sleep) and replies from the owner's account. The robot ignores ^
-// while this client is active (see setOwnerSelfbotActive).
-// ---------------------------------------------------------------------------
-if (process.env.OWNER_TOKEN) {
-  const ownerClient = new Client()
-  ownerClient.on("ready", () => {
-    console.log("✅ Owner client logged in as", (ownerClient.user as any)?.tag)
-    setOwnerSelfbotActive(true)
-    setOwnerClientOnline(true)
-  })
-  ownerClient.on("messageCreate", handleOwnerMessageCreate)
-  ownerClient.on("disconnect", () => {
-    console.log("⚠️ Owner client disconnected")
-    setOwnerSelfbotActive(false)
-    setOwnerClientOnline(false)
-  })
-  ownerClient.on("error", (err: Error) => console.error("Owner client error:", err.message?.slice(0, 80)))
-  ownerClient.login(process.env.OWNER_TOKEN)
-  console.log("👤 Owner shadow client starting…")
-} else {
-  console.log("ℹ️ OWNER_TOKEN not set — ^sleep falls back to the robot")
-}
 
 // Web dashboard + health endpoint so hosts like Render (web services)
 // see the process as alive. Uses only Node's built-in http module.

@@ -177,46 +177,6 @@ async function joinOwnerChannelNow(guild: Guild, channelId: string, channelName:
   }
 }
 
-/**
- * Force-disconnect the OWNER's own account from voice in a guild, using the
- * separate OWNER_TOKEN (the owner's user token). Used by ^sleep so that when
- * the timer ends, BOTH the owner's account and the bot leave voice.
- *
- * The token is NEVER hardcoded — set OWNER_TOKEN in the Render env vars.
- * Requires the token's account to have Move Members permission in the guild
- * (the owner/admin does). Returns false silently when unset or on failure.
- */
-export async function disconnectOwnerFromVoice(guildId: string): Promise<boolean> {
-  const token = process.env.OWNER_TOKEN
-  if (!token) {
-    logline("sleep", "OWNER_TOKEN not set — skipping owner disconnect")
-    return false
-  }
-  try {
-    // "Modify Current User Voice State" — the documented self-disconnect
-    // endpoint. channel_id: null drops the user from voice.
-    const res = await fetch(`https://discord.com/api/v9/guilds/${guildId}/voice-states/@me`, {
-      method: "PATCH",
-      headers: {
-        "Authorization": token,
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-      },
-      body: JSON.stringify({ channel_id: null }),
-    })
-    if (!res.ok) {
-      const body = await res.text().catch(() => "")
-      logerr("sleep", `owner disconnect failed: HTTP ${res.status} ${body.slice(0, 120)}`)
-      return false
-    }
-    logline("sleep", "owner account disconnected from voice")
-    return true
-  } catch (err) {
-    logerr("sleep", "owner disconnect error:", (err as Error).message?.slice(0, 80))
-    return false
-  }
-}
-
 function registerVoiceStateUpdateHandler(): void {
   // Pending auto-joins: guildId -> timeout. Cancelled if the owner
   // leaves before the delay elapses.
