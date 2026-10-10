@@ -250,10 +250,22 @@ export async function checkOutboundIp(): Promise<string> {
 export async function testProxyAt(index: number): Promise<{ ok: boolean; ip: string; ms: number }> {
   const p = proxies[index]
   if (!p) return { ok: false, ip: "no such proxy", ms: 0 }
+  // Validate the URL shape first — catches malformed PROXY_LIST entries.
+  try {
+    const u = new URL(p.url)
+    if (!u.hostname || !u.port) return { ok: false, ip: "bad URL (no host/port)", ms: 0 }
+  } catch {
+    return { ok: false, ip: "bad URL (unparseable)", ms: 0 }
+  }
   const start = Date.now()
   try {
     const { ProxyAgent } = await import("undici")
-    const dispatcher = new ProxyAgent(p.url)
+    let dispatcher: any
+    try {
+      dispatcher = new ProxyAgent(p.url)
+    } catch (err: any) {
+      return { ok: false, ip: "bad proxy URL: " + (err.message || "invalid").slice(0, 40), ms: Date.now() - start }
+    }
     const ctrl = new AbortController()
     const timer = setTimeout(() => ctrl.abort(), 15000)
     try {
@@ -263,16 +275,31 @@ export async function testProxyAt(index: number): Promise<{ ok: boolean; ip: str
         headers: { "User-Agent": "Mozilla/5.0" },
       })
       clearTimeout(timer)
-      if (!res.ok) return { ok: false, ip: `HTTP ${res.status}`, ms: Date.now() - start }
+      if (!res.ok) {
+        markFailure(p)
+        return { ok: false, ip: res.status === 407 ? "auth failed (407)" : `HTTP ${res.status}`, ms: Date.now() - start }
+      }
       const j = await res.json()
       markSuccess(p)
       return { ok: true, ip: j.ip || "unknown", ms: Date.now() - start }
     } catch (err: any) {
       clearTimeout(timer)
       markFailure(p)
-      return { ok: false, ip: (err.message || "error").slice(0, 50), ms: Date.now() - start }
+      return { ok: false, ip: describeNetError(err), ms: Date.now() - start }
     }
   } catch (err: any) {
     return { ok: false, ip: (err.message || "error").slice(0, 50), ms: Date.now() - start }
   }
+}
+
+/** Human-readable network failure reason from an undici/fetch error. */
+function describeNetError(err: any): string {
+  const cause: any = err?.cause || err
+  const code = String(cause?.code || "")
+  if (code === "ECONNREFUSED") return "connection refused (server down)"
+  if (code === "ENOTFOUND" || code === "EAI_AGAIN") return "DNS failed (bad hostname)"
+  if (code === "ETIMEDOUT" || code === "UND_ERR_CONNECT_TIMEOUT") return "connect timeout"
+  if (cause?.name === "TimeoutError" || /aborted/i.test(err?.message || "")) return "timed out (15s)"
+  if (/407|proxy.*auth/i.test(err?.message || "")) return "proxy auth failed"
+  return (err.message || "fetch failed").slice(0, 50)
 }
