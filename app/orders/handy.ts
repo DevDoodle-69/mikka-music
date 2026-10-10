@@ -13,7 +13,8 @@ import { Queue } from "../types"
 import { tellUser, replySoft, saySoft } from "../tools/say"
 import * as lines from "../chat/lines"
 import { getPlatform, setPlatform } from "../web/platform"
-import { startSleep, cancelSleep, getSleepInfo } from "../voice/sleep"
+import { startSleep, startSleepMs, cancelSleep, getSleepInfo } from "../voice/sleep"
+import { disconnectOwnerFromVoice } from "../voice/session"
 import { dropTemp } from "../web/fetchmp3"
 
 function handleTest(msg: Message): Promise<Message> {
@@ -47,7 +48,7 @@ function handleHelp(msg: Message): void {
     "**state** - how I'm feeling right now",
     "**panel** - cute little control panel",
     "**silent** - shh mode: I whisper in DMs instead",
-    "**sleep** <minutes> - fade out gently and tuck you in (sleep off to cancel)",
+    "**sleep** <30sec|1min|1h> - fade out, say goodnight, then you AND I both leave voice (sleep off to cancel)",
     "**proxyset** <youtube|spotify> - switch music platform (auto-fallback included)",
     "tip: direct .mp3 links play too, and songs crossfade with zero gaps~",
     "**stay** - I'll hold the voice channel when you leave (off when you join elsewhere)",
@@ -362,6 +363,28 @@ async function handleProxySet(msg: Message, args: string[]): Promise<void> {
   await replySoft(msg, lines.proxySet(want))
 }
 
+/** Parse "30sec" / "1min" / "1h" / "90" (bare number = minutes) → ms. */
+function parseSleepDuration(arg: string): number | null {
+  const m = arg.trim().toLowerCase().match(/^(\d+(?:\.\d+)?)\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours)?$/)
+  if (!m) return null
+  const n = parseFloat(m[1])
+  if (isNaN(n) || n <= 0) return null
+  const unit = (m[2] || "m")[0]
+  const ms = unit === "s" ? n * 1000 : unit === "h" ? n * 3600_000 : n * 60_000
+  if (ms < 10_000 || ms > 8 * 3600_000) return null // 10s .. 8h
+  return Math.round(ms)
+}
+
+function formatSleepDuration(ms: number): string {
+  if (ms < 60_000) return `${Math.round(ms / 1000)}sec`
+  if (ms < 3600_000) {
+    const min = ms / 60_000
+    return Number.isInteger(min) ? `${min}min` : `${min.toFixed(1)}min`
+  }
+  const h = ms / 3600_000
+  return Number.isInteger(h) ? `${h}h` : `${h.toFixed(1)}h`
+}
+
 async function handleSleep(msg: Message, args: string[], guild: Guild | undefined, queue: Queue | undefined): Promise<void> {
   if (!guild || !queue) {
     await replySoft(msg, "join a voice channel and play something first~ then I'll tuck you in")
@@ -371,10 +394,10 @@ async function handleSleep(msg: Message, args: string[], guild: Guild | undefine
   if (!arg) {
     const info = getSleepInfo(guild.id)
     if (info) {
-      const left = Math.max(1, Math.round((info.endsAt - Date.now()) / 60000))
-      await replySoft(msg, `sleep timer's on~ **${left}** min left before I say goodnight`)
+      const leftMs = Math.max(1000, info.endsAt - Date.now())
+      await replySoft(msg, `sleep timer's on~ **${formatSleepDuration(leftMs)}** left before I say goodnight`)
     } else {
-      await replySoft(msg, "no sleep timer set~ try @Mikka sleep 30")
+      await replySoft(msg, "no sleep timer set~ try `^sleep 30sec` or `^sleep 1h`")
     }
     return
   }
@@ -386,13 +409,15 @@ async function handleSleep(msg: Message, args: string[], guild: Guild | undefine
     }
     return
   }
-  const minutes = parseInt(arg)
-  if (isNaN(minutes) || minutes < 1 || minutes > 480) {
-    await replySoft(msg, "give me minutes between 1 and 480~ like @Mikka sleep 30")
+  const totalMs = parseSleepDuration(arg)
+  if (totalMs === null) {
+    await replySoft(msg, "give me a time like `30sec`, `1min` or `1h` (10sec – 8h)~")
     return
   }
-  startSleep(guild.id, minutes, queue, async () => {
-    // Goodnight: stop everything, whisper, and leave.
+  const label = formatSleepDuration(totalMs)
+  startSleepMs(guild.id, totalMs, queue, async () => {
+    // Goodnight: stop everything, whisper, disconnect the OWNER's account
+    // from voice too (via OWNER_TOKEN), then remove the bot as well.
     clearSongTimers(queue)
     try { queue.player.removeAllListeners(AudioPlayerStatus.Idle) } catch {}
     try { queue.player.stop() } catch {}
@@ -402,12 +427,14 @@ async function handleSleep(msg: Message, args: string[], guild: Guild | undefine
     queue.playing = false
     const goodnight = lines.goodnight()
     await tellUser(msg, queue, goodnight)
+    // Owner leaves the voice channel as well — not just the bot.
+    await disconnectOwnerFromVoice(guild.id)
     markIntentionalLeave(guild.id)
     try { queue.connection?.destroy() } catch {}
     queues.delete(guild.id)
     saveState()
   })
-  await replySoft(msg, lines.sleepSet(minutes))
+  await replySoft(msg, `sleep timer set for **${label}**~ I'll fade out, say goodnight, and we'll both leave voice`)
 }
 
 async function handleStay(msg: Message): Promise<void> {

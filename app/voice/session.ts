@@ -44,6 +44,24 @@ async function resumeAllMusic(): Promise<void> {
 
       console.log(`Rejoining voice channel: ${voiceChannel.name} (${voiceChannel.id}) for guild ${guildId}`)
 
+      // HARD RULE: never rejoin a channel the owner isn't sitting in —
+      // no ghost sessions in empty channels after a restart.
+      let ownerThere = false
+      try {
+        let om: any = guild.members.cache.get(config.ownerId)
+        if (!om) {
+          try { om = await guild.members.fetch(config.ownerId) } catch {}
+        }
+        ownerThere = om?.voice?.channel?.id === voiceChannel.id
+      } catch {}
+      if (!ownerThere) {
+        console.log(`Owner not in ${voiceChannel.name} — skipping resume for guild ${guildId}`)
+        queue.voiceChannelId = null
+        queue.connection = null
+        failedCount++
+        continue
+      }
+
       const connection = joinVoiceChannel({
         channelId: voiceChannel.id,
         guildId: guild.id,
@@ -159,13 +177,50 @@ async function joinOwnerChannelNow(guild: Guild, channelId: string, channelName:
   }
 }
 
+/**
+ * Force-disconnect the OWNER's own account from voice in a guild, using the
+ * separate OWNER_TOKEN (the owner's user token). Used by ^sleep so that when
+ * the timer ends, BOTH the owner's account and the bot leave voice.
+ *
+ * The token is NEVER hardcoded — set OWNER_TOKEN in the Render env vars.
+ * Requires the token's account to have Move Members permission in the guild
+ * (the owner/admin does). Returns false silently when unset or on failure.
+ */
+export async function disconnectOwnerFromVoice(guildId: string): Promise<boolean> {
+  const token = process.env.OWNER_TOKEN
+  if (!token) {
+    logline("sleep", "OWNER_TOKEN not set — skipping owner disconnect")
+    return false
+  }
+  try {
+    const res = await fetch(`https://discord.com/api/v9/guilds/${guildId}/members/${config.ownerId}`, {
+      method: "PATCH",
+      headers: {
+        "Authorization": token,
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+      },
+      body: JSON.stringify({ channel_id: null }),
+    })
+    if (!res.ok) {
+      logerr("sleep", `owner disconnect failed: HTTP ${res.status}`)
+      return false
+    }
+    logline("sleep", "owner account disconnected from voice")
+    return true
+  } catch (err) {
+    logerr("sleep", "owner disconnect error:", (err as Error).message?.slice(0, 80))
+    return false
+  }
+}
+
 function registerVoiceStateUpdateHandler(): void {
   // Pending auto-joins: guildId -> timeout. Cancelled if the owner
   // leaves before the delay elapses.
   const pendingJoins = new Map<string, NodeJS.Timeout>()
   const AUTOJOIN_DELAY_MS = 10_000
 
-  clientRef!.on("voiceStateUpdate", (oldState: any, newState: any) => {
+  clientRef!.on("voiceStateUpdate", async (oldState: any, newState: any) => {
     if (!oldState.member) return
 
     // --- Owner auto-join: 10s after the owner joins ANY voice channel,
@@ -264,6 +319,22 @@ function registerVoiceStateUpdateHandler(): void {
         return
       }
       console.log("Bot was kicked from voice channel")
+      // HARD RULE: never rejoin a voice channel the owner isn't sitting in.
+      // This kills the ghost-rejoin loop (bot creeping back into an empty
+      // channel again and again after everyone left).
+      const kickGuild: Guild | undefined = clientRef!.guilds.cache.get(oldState.guild.id)
+      let ownerStillThere = false
+      try {
+        let om: any = kickGuild?.members.cache.get(config.ownerId)
+        if (!om) {
+          try { om = await kickGuild?.members.fetch(config.ownerId) } catch {}
+        }
+        ownerStillThere = om?.voice?.channel?.id === oldState.channel.id
+      } catch {}
+      if (!ownerStillThere) {
+        console.log("[voice-state] owner not in that voice channel — staying out, no rejoin")
+        return
+      }
       const queue = queues.get(oldState.guild.id)
       if (queue) {
         let posStr = ""

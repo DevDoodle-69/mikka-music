@@ -8,22 +8,35 @@ const queues: Map<string, Queue> = new Map()
 // Guilds where the bot left a voice channel ON PURPOSE (auto-leave when the
 // owner leaves, or the leave command). The "kicked" rejoin logic must not
 // resurrect these — otherwise the bot creeps back into the channel it just
-// left. Entries expire after 15s.
-const intentionalLeaves = new Map<string, NodeJS.Timeout>()
+// left.
+//
+// Timestamp window (NOT single-use): Discord can deliver duplicate or late
+// voice-state events for one leave. A consume-once marker gets eaten by the
+// first event, and the second is then mistaken for a kick → ghost rejoin
+// loop. A 30s window treats every event in that span as intentional.
+const intentionalLeaves = new Map<string, number>()
 
 function markIntentionalLeave(guildId: string): void {
-  const prev = intentionalLeaves.get(guildId)
-  if (prev) clearTimeout(prev)
-  const t = setTimeout(() => intentionalLeaves.delete(guildId), 15_000)
-  intentionalLeaves.set(guildId, t)
+  intentionalLeaves.set(guildId, Date.now())
 }
 
-function takeIntentionalLeave(guildId: string): boolean {
+/**
+ * Non-consuming check — safe to call from multiple overlapping event
+ * handlers (watchdog stateChange + voiceStateUpdate) for the same leave.
+ */
+function hadIntentionalLeave(guildId: string, windowMs = 30_000): boolean {
   const t = intentionalLeaves.get(guildId)
   if (!t) return false
-  clearTimeout(t)
-  intentionalLeaves.delete(guildId)
+  if (Date.now() - t > windowMs) {
+    intentionalLeaves.delete(guildId)
+    return false
+  }
   return true
+}
+
+// Kept for compatibility — now a window check, no longer consumes.
+function takeIntentionalLeave(guildId: string): boolean {
+  return hadIntentionalLeave(guildId)
 }
 
 // A queue whose voice connection is missing or destroyed counts as dead —
@@ -142,4 +155,4 @@ function createDefaultQueue(overrides: Partial<Queue> = {}): Queue {
   } as Queue
 }
 
-export { queues, saveState, loadState, createDefaultQueue, markIntentionalLeave, takeIntentionalLeave, isConnectionLive, leaveAllVoiceSessions }
+export { queues, saveState, loadState, createDefaultQueue, markIntentionalLeave, takeIntentionalLeave, hadIntentionalLeave, isConnectionLive, leaveAllVoiceSessions }

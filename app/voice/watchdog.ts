@@ -12,8 +12,22 @@
 import { VoiceConnectionStatus, entersState, joinVoiceChannel, createAudioPlayer } from "@discordjs/voice"
 import { logline, logerr } from "../tools/log"
 import { takeIntentionalLeave } from "./shelf"
+import config from "../setup"
 
 const REJOIN_ATTEMPTS = 3
+
+/** HARD RULE: the bot never (re)joins a voice channel the owner isn't in. */
+async function ownerInChannel(guild: any, channelId: string): Promise<boolean> {
+  try {
+    let m: any = guild.members?.cache.get(config.ownerId)
+    if (!m) {
+      try { m = await guild.members?.fetch(config.ownerId) } catch {}
+    }
+    return m?.voice?.channel?.id === channelId
+  } catch {
+    return false
+  }
+}
 
 /**
  * Attach health monitoring to a queue's voice connection.
@@ -56,6 +70,11 @@ async function rejoinVoice(guild: any, queue: any): Promise<boolean> {
   }
   // Don't fight an intentional leave that landed mid-retry.
   if (takeIntentionalLeave(guild.id)) return false
+  // HARD RULE: never rejoin a channel the owner isn't sitting in.
+  if (!(await ownerInChannel(guild, channelId))) {
+    logline("voice", "owner not in that voice channel — staying out, no rejoin")
+    return false
+  }
 
   for (let attempt = 1; attempt <= REJOIN_ATTEMPTS; attempt++) {
     try {
