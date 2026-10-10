@@ -23,13 +23,13 @@ let ownerClientOnline = false
 export function setOwnerClientOnline(v: boolean): void { ownerClientOnline = v }
 export function isOwnerClientOnline(): boolean { return ownerClientOnline }
 
-/** Which guild is the owner actually sitting in voice in (via this client)? */
-async function findOwnerVoiceGuild(client: any, ownerId: string): Promise<{ guild: Guild; channel: VoiceChannel } | null> {
+/** Where is the owner sitting in voice right now? (gateway cache — no API calls) */
+function findOwnerVoiceGuild(client: any, ownerId: string): { guild: Guild; channel: VoiceChannel } | null {
   try {
     for (const [, g] of client.guilds.cache) {
       try {
-        const m: any = await g.members.fetch(ownerId).catch(() => null)
-        const ch = m?.voice?.channel
+        const vs: any = g.voiceStates?.cache?.get(ownerId)
+        const ch = vs?.channel
         if (ch) return { guild: g, channel: ch }
       } catch {}
     }
@@ -39,15 +39,18 @@ async function findOwnerVoiceGuild(client: any, ownerId: string): Promise<{ guil
   return null
 }
 
-/** Fallback: send the native OP 4 voice-state packet (what the official
- *  client sends when you click disconnect). Used if the REST call fails. */
+/** PRIMARY leave: the native OP 4 voice-state packet — exactly what the
+ *  official client sends when you click "Disconnect". */
 function gatewayLeaveVoice(ownerClient: any, guildId: string): boolean {
   try {
     const shards = ownerClient?.ws?.shards
     const shard = shards?.get ? (shards.get(0) || [...shards.values()][0]) : null
-    if (!shard || typeof shard.send !== "function") return false
-    shard.send({ op: 4, d: { guild_id: guildId, channel_id: null, self_mute: false, self_deaf: false } })
-    logline("sleep", "sent gateway OP 4 voice leave")
+    if (!shard || typeof shard.send !== "function") {
+      logerr("sleep", "gateway leave: no shard available")
+      return false
+    }
+    shard.send({ op: 4, d: { guild_id: guildId, channel_id: null, self_mute: false, self_deaf: false } }, true)
+    logline("sleep", `sent gateway OP 4 voice leave (guild ${guildId})`)
     return true
   } catch (err) {
     logerr("sleep", "gateway leave failed:", (err as Error).message?.slice(0, 60))
@@ -62,14 +65,11 @@ async function handleOwnerSleep(msg: Message, args: string[]): Promise<void> {
     try { await (msg.channel as any).send(text) } catch {}
   }
 
-  // Resolve the guild: message guild first, else wherever the owner is sitting in voice.
-  let guild: Guild | undefined = (msg as any).guild || undefined
-  if (!guild) {
-    try {
-      const found = await findOwnerVoiceGuild(client, ownerId)
-      if (found) guild = found.guild
-    } catch {}
-  }
+  // Resolve WHERE to leave at SET time: the voice channel the owner is
+  // sitting in right now (gateway cache). Fall back to the message guild.
+  const inVoice = findOwnerVoiceGuild(client, ownerId)
+  const guild: Guild | undefined = inVoice?.guild || (msg as any).guild || undefined
+  const channelName: string | null = (inVoice?.channel as any)?.name || null
 
   const arg = (args[0] || "").toLowerCase()
 
@@ -100,22 +100,22 @@ async function handleOwnerSleep(msg: Message, args: string[]): Promise<void> {
   }
 
   const label = formatSleepDuration(totalMs)
+  const targetGuildId = guild.id
+  const where = channelName ? `**${channelName}**` : "the voice chat"
+  logline("sleep", `owner ^sleep set: ${label}, will leave guild ${targetGuildId} (${channelName || "?"})`)
 
   startSleepMs(guild.id, totalMs, { volume: 1 }, async () => {
-    logline("sleep", `owner sleep done (${label}) — my account leaves voice`)
+    logline("sleep", `owner sleep done (${label}) — my account leaves voice (guild ${targetGuildId})`)
     // ONLY my own account leaves. The robot is separate and untouched —
     // it will see its owner left and follow on its own (normal auto-leave).
-    let targetGuildId: string = guild.id
-    try {
-      const found = await findOwnerVoiceGuild(client, ownerId)
-      if (found) targetGuildId = found.guild.id
-    } catch {}
-    let ok = await disconnectOwnerFromVoice(targetGuildId)
-    if (!ok) ok = gatewayLeaveVoice(client, targetGuildId)
-    await say(ok ? "left the voice chat — goodnight" : "timer's up, but I couldn't leave voice — check the connection and try again")
+    // PRIMARY: native gateway OP 4 (what the real client sends). REST fallback.
+    let ok = gatewayLeaveVoice(client, targetGuildId)
+    if (!ok) ok = await disconnectOwnerFromVoice(targetGuildId)
+    logline("sleep", `owner voice leave ${ok ? "sent" : "FAILED"} (guild ${targetGuildId})`)
+    await say(ok ? `leaving ${where} now — goodnight` : "timer's up, but I couldn't leave voice — check the host logs and try again")
   })
 
-  await say(`okay — I'll leave the voice chat in ${label}`)
+  await say(`okay — I'll leave ${where} in ${label}`)
 }
 
 /**
