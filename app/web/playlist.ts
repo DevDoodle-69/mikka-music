@@ -6,23 +6,31 @@
  *   @Mikka playlist play all   — shuffle-play every uploaded song
  *   @Mikka playlist play 10    — shuffle-play up to 10 of them
  *   @Mikka playlist list       — show what's uploaded
+ *   @Mikka playlist add <url>   — download a song link into the playlist
+ *
+ * An index.json remembers each track's source URL, so if a file ever
+ * goes missing (e.g. Render's ephemeral disk after a redeploy), the bot
+ * silently re-downloads it from the source instead of failing.
  *
  * NOTE on Render's free tier: the filesystem is ephemeral — uploads
- * survive until the next redeploy/restart. For a permanent library,
- * attach a persistent disk (PLAYLIST_DIR pointing at it) or re-upload
- * after deploys.
+ * survive until the next redeploy/restart. Tracks added via URL
+ * self-heal; dashboard uploads need a re-upload after a redeploy.
  */
 import fs from "fs"
 import path from "path"
-import { logline } from "../tools/log"
+import { logline, logerr } from "../tools/log"
+import { resolveStream, downloadSnowpingMp3 } from "./snowping"
+import { resolveSpotifyDownload } from "./spotify"
 
 export interface PlaylistTrack {
   name: string
   size: number
   addedAt: number
+  sourceUrl?: string | null
 }
 
 const DIR = process.env.PLAYLIST_DIR || path.join(process.cwd(), "data", "playlist")
+const INDEX_FILE = "index.json"
 const MAX_BYTES = 100 * 1024 * 1024 // 100MB per file
 const AUDIO_EXT = new Set([".mp3", ".m4a", ".aac", ".ogg", ".oga", ".opus", ".wav", ".flac", ".wma"])
 
@@ -45,16 +53,47 @@ export function sanitizeName(raw: string): string | null {
   return clean
 }
 
+interface IndexData { [name: string]: { sourceUrl: string | null; addedAt: number } }
+
+function indexPath(): string {
+  ensureDir()
+  return path.join(DIR, INDEX_FILE)
+}
+
+function readIndex(): IndexData {
+  try {
+    const raw = fs.readFileSync(indexPath(), "utf8")
+    const j = JSON.parse(raw)
+    return j && typeof j === "object" ? j : {}
+  } catch { return {} }
+}
+
+function writeIndex(idx: IndexData): void {
+  try { fs.writeFileSync(indexPath(), JSON.stringify(idx)) } catch {}
+}
+
+function setIndexEntry(name: string, sourceUrl: string | null): void {
+  const idx = readIndex()
+  idx[name] = { sourceUrl, addedAt: Date.now() }
+  writeIndex(idx)
+}
+
+function dropIndexEntry(name: string): void {
+  const idx = readIndex()
+  if (idx[name]) { delete idx[name]; writeIndex(idx) }
+}
+
 export function listTracks(): PlaylistTrack[] {
   ensureDir()
+  const idx = readIndex()
   let files: string[] = []
   try { files = fs.readdirSync(DIR) } catch { return [] }
   return files
-    .filter((f) => AUDIO_EXT.has(path.extname(f).toLowerCase()))
-    .map((f) => {
+    .filter((f) => f !== INDEX_FILE && AUDIO_EXT.has(path.extname(f).toLowerCase()))
+    .map((f): PlaylistTrack | null => {
       try {
         const st = fs.statSync(path.join(DIR, f))
-        return { name: f, size: st.size, addedAt: st.mtimeMs }
+        return { name: f, size: st.size, addedAt: st.mtimeMs, sourceUrl: idx[f]?.sourceUrl || null }
       } catch { return null }
     })
     .filter((t): t is PlaylistTrack => t !== null)
@@ -71,13 +110,9 @@ export function trackPath(name: string): string | null {
   try { return fs.existsSync(p) ? p : null } catch { return null }
 }
 
-export async function saveUpload(rawName: string, data: Buffer): Promise<{ ok: boolean; name?: string; error?: string }> {
-  const safe = sanitizeName(rawName)
-  if (!safe) return { ok: false, error: "only audio files (mp3/m4a/wav/ogg/flac/opus/aac)" }
-  if (!data || data.length === 0) return { ok: false, error: "empty file" }
-  if (data.length > MAX_BYTES) return { ok: false, error: "file too big (100MB max)" }
+/** Unique non-colliding file name inside the playlist dir. */
+function uniqueName(safe: string): string {
   ensureDir()
-  // Avoid overwriting: "song.mp3" -> "song (1).mp3"
   let name = safe
   let i = 1
   const ext = path.extname(safe)
@@ -85,15 +120,95 @@ export async function saveUpload(rawName: string, data: Buffer): Promise<{ ok: b
   while (fs.existsSync(path.join(DIR, name))) {
     name = `${stem} (${i})${ext}`
     i++
-    if (i > 999) return { ok: false, error: "too many duplicates" }
+    if (i > 999) break
   }
+  return name
+}
+
+export async function saveUpload(rawName: string, data: Buffer): Promise<{ ok: boolean; name?: string; error?: string }> {
+  const safe = sanitizeName(rawName)
+  if (!safe) return { ok: false, error: "only audio files (mp3/m4a/wav/ogg/flac/opus/aac)" }
+  if (!data || data.length === 0) return { ok: false, error: "empty file" }
+  if (data.length > MAX_BYTES) return { ok: false, error: "file too big (100MB max)" }
+  const name = uniqueName(safe)
   try {
     await fs.promises.writeFile(path.join(DIR, name), data)
-  } catch (err) {
+  } catch {
     return { ok: false, error: "couldn't save file" }
   }
+  setIndexEntry(name, null) // dashboard upload: no source URL to re-fetch from
   logline("playlist", `uploaded "${name}" (${(data.length / 1048576).toFixed(1)}MB)`)
   return { ok: true, name }
+}
+
+/**
+ * Download a song link into the playlist.
+ * Accepts: direct audio URLs, YouTube links/queries, Spotify track links.
+ * If preferName is given (re-download), the same file name is reused.
+ */
+export async function addFromUrl(url: string, preferName?: string): Promise<{ ok: boolean; name?: string; error?: string }> {
+  const u = (url || "").trim()
+  if (!/^https?:\/\//i.test(u)) return { ok: false, error: "give me a proper http(s) link~" }
+  let dlUrl: string
+  let title: string
+  try {
+    if (/open\.spotify\.com/i.test(u)) {
+      const dl = await resolveSpotifyDownload(u)
+      if (!dl.downloadUrl) throw new Error("no download for that spotify link")
+      dlUrl = dl.downloadUrl
+      title = dl.artist ? `${dl.artist} - ${dl.title}` : dl.title
+    } else if (/\.(mp3|m4a|aac|ogg|oga|opus|wav|flac|wma)(\?|#|$)/i.test(u)) {
+      dlUrl = u
+      const tail = decodeURIComponent(u.split("/").pop() || "track").split("?")[0]
+      title = tail.replace(/\.[^.]+$/, "") || "track"
+    } else {
+      const track = await resolveStream(u)
+      if (!track.streamUrl) throw new Error("couldn't resolve that link")
+      dlUrl = track.streamUrl
+      title = track.title || "track"
+    }
+  } catch (err) {
+    return { ok: false, error: `couldn't resolve that link (${((err as Error).message || "").slice(0, 60)})` }
+  }
+
+  let tmp = ""
+  try {
+    tmp = await downloadSnowpingMp3(dlUrl)
+    const st = fs.statSync(tmp)
+    if (st.size > MAX_BYTES) { try { fs.unlinkSync(tmp) } catch {} return { ok: false, error: "file too big (100MB max)" } }
+    if (st.size === 0) { try { fs.unlinkSync(tmp) } catch {} return { ok: false, error: "download came back empty" }
+    }
+    const wanted = (preferName && sanitizeName(preferName)) || sanitizeName(`${title}.mp3`) || "track.mp3"
+    // Re-download of a known name: overwrite it in place.
+    const name = preferName && sanitizeName(preferName) ? (sanitizeName(preferName) as string) : uniqueName(wanted)
+    ensureDir()
+    await fs.promises.copyFile(tmp, path.join(DIR, name))
+    try { fs.unlinkSync(tmp) } catch {}
+    setIndexEntry(name, u)
+    logline("playlist", `added "${name}" from url (${(st.size / 1048576).toFixed(1)}MB)`)
+    return { ok: true, name }
+  } catch (err) {
+    if (tmp) { try { fs.unlinkSync(tmp) } catch {} }
+    logerr("playlist", "addFromUrl failed:", (err as Error).message?.slice(0, 80))
+    return { ok: false, error: `download failed (${((err as Error).message || "").slice(0, 60)})` }
+  }
+}
+
+/**
+ * Resolve a playable path for a track name. If the file is missing but we
+ * know its source URL, re-download it on the fly (self-healing).
+ */
+export async function ensureTrack(name: string): Promise<string | null> {
+  const direct = trackPath(name)
+  if (direct) return direct
+  const safe = sanitizeName(name)
+  if (!safe) return null
+  const entry = readIndex()[safe]
+  if (!entry?.sourceUrl) return null
+  logline("playlist", `file gone, re-fetching "${safe}" from source`)
+  const r = await addFromUrl(entry.sourceUrl, safe)
+  if (!r.ok || !r.name) return null
+  return trackPath(r.name)
 }
 
 export function deleteTrack(name: string): boolean {
@@ -101,6 +216,7 @@ export function deleteTrack(name: string): boolean {
   if (!p) return false
   try {
     fs.unlinkSync(p)
+    dropIndexEntry(path.basename(p))
     logline("playlist", `deleted "${name}"`)
     return true
   } catch { return false }

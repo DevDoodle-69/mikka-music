@@ -16,15 +16,31 @@ import { dropTemp } from "../web/fetchmp3"
 import { watchConnection } from "../voice/watchdog"
 import { searchSpotify, findOnSpotify, resolveSpotifyPlaylist } from "../web/spotify"
 import { getPlatform } from "../web/platform"
-import { listTracks } from "../web/playlist"
+import { listTracks, addFromUrl } from "../web/playlist"
 
 /**
  * @Mikka playlist play all   — shuffle-play every uploaded song
  * @Mikka playlist play 10    — shuffle-play up to 10 uploaded songs
  * @Mikka playlist list       — show what's in My Playlist
+ * @Mikka playlist add <url>  — download a song link into My Playlist
  */
 async function handlePlaylist(msg: Message, args: string[], guild: Guild, voice: VoiceChannel | null, queue: Queue | undefined): Promise<void> {
   const sub = (args[0] || "").toLowerCase()
+  if (sub === "add") {
+    const url = args[1]
+    if (!url) {
+      await tellUser(msg, queue, "give me a link~ `@Mikka playlist add <song link>`")
+      return
+    }
+    await tellUser(msg, queue, "grabbing that for your playlist~ one sec")
+    const r = await addFromUrl(url)
+    if (r.ok) {
+      await tellUser(msg, queue, `added **${r.name}** to your playlist~ it's ready to shuffle`)
+    } else {
+      await tellUser(msg, queue, `couldn't add that~ ${r.error || "try another link?"}`)
+    }
+    return
+  }
   if (sub === "list") {
     const tracks = listTracks()
     if (tracks.length === 0) {
@@ -68,7 +84,7 @@ async function handlePlaylist(msg: Message, args: string[], guild: Guild, voice:
     await enqueueAndPlay(msg, guild, voice, queue, songs)
     return
   }
-  await tellUser(msg, queue, "try `@Mikka playlist play all`, `@Mikka playlist play 10`, or `@Mikka playlist list`~")
+  await tellUser(msg, queue, "try `@Mikka playlist play all`, `@Mikka playlist play 10`, `@Mikka playlist add <link>`, or `@Mikka playlist list`~")
 }
 
 interface PlaylistJSON {

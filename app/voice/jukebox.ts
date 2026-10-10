@@ -211,10 +211,11 @@ async function fetchSongFile(song: Song, notify?: (msg: string) => Promise<void>
   try {
     if (platform === "local") {
       // User's uploaded playlist file: play straight from disk, no download.
-      // `song.url` carries the sanitized file name.
-      const { trackPath } = await import("../web/playlist")
-      const p = trackPath(song.url)
-      if (!p) throw new Error("playlist file is gone")
+      // `song.url` carries the sanitized file name. ensureTrack re-downloads
+      // from the source URL if the file ever went missing.
+      const { ensureTrack } = await import("../web/playlist")
+      const p = await ensureTrack(song.url)
+      if (!p) throw new Error("playlist file is gone (re-upload it or add via link)")
       logline("music", `playing local file "${song.title}"`)
       return { kind: "file", path: p, keep: true }
     }

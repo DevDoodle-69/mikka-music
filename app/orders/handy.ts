@@ -36,6 +36,7 @@ function handleHelp(msg: Message): void {
     "**aiplay** <describe the vibe> [limit] - I pick the songs with AI~",
     "**playlist** play all - shuffle everything you uploaded on the dashboard",
     "**playlist** play <n> - shuffle n of your uploads (playlist list to peek)",
+    "**playlist** add <link> - download a song link into your playlist",
     "**skip** - next song, no hard feelings",
     "**loop** - round and round: Off / Single / All",
     "**shuffle** - let fate pick the order",

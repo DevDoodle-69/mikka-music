@@ -16,7 +16,7 @@
  */
 import { queues } from "../voice/shelf"
 import { recentLogs, logline, logerr } from "../tools/log"
-import { listTracks, saveUpload, deleteTrack } from "./playlist"
+import { listTracks, saveUpload, deleteTrack, addFromUrl } from "./playlist"
 
 let botClient: any = null
 const startedAt = Date.now()
@@ -241,6 +241,20 @@ const PAGE = `<!DOCTYPE html>
   .tag-tube{color:var(--yellow)} .tag-net{color:#d4d4d4} .tag-playlist{color:var(--pink)} .tag-sleep{color:var(--violet)}
   .hint { color: var(--faint); font-size: 12px; margin-top: 10px; line-height: 1.6; }
   .hint code { background: var(--card2); padding: 2px 7px; border-radius: 6px; color: var(--cyan); font-size: 11.5px; }
+  .urlrow { display: flex; gap: 10px; margin: 14px 0 4px; }
+  .urlrow input { flex: 1; min-width: 0; background: var(--inset); border: 1px solid var(--line);
+    border-radius: 12px; padding: 12px 14px; color: var(--text); font-size: 13.5px; outline: none;
+    transition: border-color .2s; }
+  .urlrow input:focus { border-color: var(--violet); }
+  .urlrow input::placeholder { color: var(--faint); }
+  .btn { border: none; cursor: pointer; font-weight: 700; font-size: 13.5px; color: #0b0817;
+    padding: 0 22px; border-radius: 12px; background: linear-gradient(135deg, var(--pink), var(--violet));
+    box-shadow: 0 6px 20px rgba(255,122,184,.3); transition: transform .15s, box-shadow .15s; }
+  .btn:hover { transform: translateY(-1px); box-shadow: 0 8px 26px rgba(255,122,184,.45); }
+  .btn:active { transform: translateY(0); }
+  .btn:disabled { opacity: .55; cursor: default; transform: none; }
+  .footer { text-align: center; color: var(--faint); font-size: 12px; margin-top: 26px; letter-spacing: .4px; }
+  .footer b { color: var(--pink); }
   @media (max-width: 640px) {
     .grid { grid-template-columns: 1fr; }
     .stats { grid-template-columns: repeat(2, 1fr); }
@@ -285,8 +299,12 @@ const PAGE = `<!DOCTYPE html>
         <input type="file" id="fileInput" accept="audio/*,.mp3,.m4a,.wav,.ogg,.oga,.opus,.flac,.aac,.wma" multiple style="display:none">
       </div>
       <div id="uploads"></div>
+      <div class="urlrow">
+        <input id="urlInput" type="url" placeholder="…or paste a song link (YouTube / Spotify / mp3)" autocomplete="off">
+        <button id="urlAdd" class="btn">Add</button>
+      </div>
       <div id="playlist" style="margin-top:6px"></div>
-      <div class="hint">Then in Discord: <code>@Mikka playlist play all</code> shuffles everything, <code>@Mikka playlist play 10</code> shuffles 10.</div>
+      <div class="hint">Then in Discord: <code>@Mikka playlist play all</code> shuffles everything, <code>@Mikka playlist play 10</code> shuffles 10, <code>@Mikka playlist add &lt;link&gt;</code> saves a link.</div>
     </div>
 
     <div class="card">
@@ -318,6 +336,7 @@ const PAGE = `<!DOCTYPE html>
       <div class="logs" id="logs"><div class="lg"><span class="lmsg" style="color:var(--dim)">connecting to log stream…</span></div></div>
     </div>
   </div>
+  <div class="footer">made with <b>♥</b> by <b>Mikka~</b> · your self-hosted jukebox</div>
 </div>
 <script>
   const NEEDS_KEY = __NEEDS_KEY__;
@@ -394,6 +413,25 @@ const PAGE = `<!DOCTYPE html>
     try { await fetch(url, {method:'DELETE'}); } catch(e) {}
     loadPlaylist();
   }
+  async function addViaUrl(){
+    const inp = $('urlInput'), btn = $('urlAdd');
+    const url = inp.value.trim();
+    if (!url) { inp.focus(); return; }
+    btn.disabled = true; btn.textContent = 'Adding…';
+    const row = upRow(url.length > 48 ? url.slice(0,48)+'…' : url);
+    try {
+      let u = '/api/playlist/add?url='+encodeURIComponent(url);
+      if (NEEDS_KEY) u += '&key='+encodeURIComponent(dashKey());
+      const r = await fetch(u, {method:'POST'});
+      const j = await r.json().catch(()=>({}));
+      if (r.ok && j.ok) { row.done(j.name); inp.value=''; }
+      else row.fail(j.error || ('HTTP '+r.status));
+    } catch(e) { row.fail('network error'); }
+    btn.disabled = false; btn.textContent = 'Add';
+    loadPlaylist();
+  }
+  $('urlAdd').addEventListener('click', addViaUrl);
+  $('urlInput').addEventListener('keydown', e => { if (e.key === 'Enter') addViaUrl(); });
   function upRow(name){
     const div = document.createElement('div');
     div.className = 'up-row';
@@ -493,6 +531,16 @@ export function handleRequest(req: any, res: any): boolean {
     req.on("error", () => {
       if (!failed) { try { json(res, 500, { ok: false, error: "upload interrupted" }) } catch {} }
     })
+    return true
+  }
+  if (url === "/api/playlist/add" && req.method === "POST") {
+    if (!checkKey(q.get("key"))) { json(res, 403, { ok: false, error: "bad key" }); return true }
+    const link = q.get("url") || ""
+    // Respond after the download finishes (could take a bit).
+    addFromUrl(link).then(
+      (r) => json(res, r.ok ? 200 : 400, r),
+      (err) => json(res, 500, { ok: false, error: "server error" })
+    )
     return true
   }
   if (url === "/" || url === "/index.html") {
