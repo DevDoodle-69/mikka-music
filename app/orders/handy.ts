@@ -367,7 +367,7 @@ async function handleProxySet(msg: Message, args: string[]): Promise<void> {
 }
 
 /** Parse "30sec" / "1min" / "1h" / "90" (bare number = minutes) → ms. */
-function parseSleepDuration(arg: string): number | null {
+export function parseSleepDuration(arg: string): number | null {
   const m = arg.trim().toLowerCase().match(/^(\d+(?:\.\d+)?)\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours)?$/)
   if (!m) return null
   const n = parseFloat(m[1])
@@ -378,7 +378,7 @@ function parseSleepDuration(arg: string): number | null {
   return Math.round(ms)
 }
 
-function formatSleepDuration(ms: number): string {
+export function formatSleepDuration(ms: number): string {
   if (ms < 60_000) return `${Math.round(ms / 1000)}sec`
   if (ms < 3600_000) {
     const min = ms / 60_000

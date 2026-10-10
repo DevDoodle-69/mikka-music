@@ -9,6 +9,12 @@ import { handleTest, handleHelp, handleLeave, handleClearChat, handleClearReacti
 import { replySoft, saySoft } from "../tools/say"
 import { Queue } from "../types"
 
+let ownerSelfbotActive = false
+/** Called by main.ts when the owner shadow client logs in/out. */
+export function setOwnerSelfbotActive(v: boolean): void {
+  ownerSelfbotActive = v
+}
+
 async function handleMessageCreate(msg: Message): Promise<void> {
   // Owner-only: this bot answers to exactly one Discord user ID.
   if (msg.author.id !== config.ownerId) return
@@ -36,7 +42,9 @@ async function handleMessageCreate(msg: Message): Promise<void> {
   const args = body.trim().split(/ +/)
   const cmd = args.shift()?.toLowerCase() || ""
   if (!cmd) return
-  if (viaCaret && !isOwnerAccount && cmd !== "sleep") return
+  // ^ on the robot: only the sleep fallback, and only while the owner
+  // shadow client isn't running (it owns ^sleep when active).
+  if (viaCaret && !isOwnerAccount && (ownerSelfbotActive || cmd !== "sleep")) return
 
   const channelName = (msg.channel as any).name || "DM"
   logline("command", `${cmd} · ${msg.author.tag} · ${args.join(" ") || "—"}`)
