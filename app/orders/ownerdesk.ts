@@ -104,15 +104,43 @@ async function handleOwnerSleep(msg: Message, args: string[]): Promise<void> {
   const where = channelName ? `**${channelName}**` : "the voice chat"
   logline("sleep", `owner ^sleep set: ${label}, will leave guild ${targetGuildId} (${channelName || "?"})`)
 
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
   startSleepMs(guild.id, totalMs, { volume: 1 }, async () => {
-    logline("sleep", `owner sleep done (${label}) — my account leaves voice (guild ${targetGuildId})`)
+    logline("sleep", `owner sleep done (${label}) — leaving ${channelName || "?"} (guild ${targetGuildId})`)
     // ONLY my own account leaves. The robot is separate and untouched —
     // it will see its owner left and follow on its own (normal auto-leave).
-    // PRIMARY: native gateway OP 4 (what the real client sends). REST fallback.
-    let ok = gatewayLeaveVoice(client, targetGuildId)
-    if (!ok) ok = await disconnectOwnerFromVoice(targetGuildId)
-    logline("sleep", `owner voice leave ${ok ? "sent" : "FAILED"} (guild ${targetGuildId})`)
-    await say(ok ? `leaving ${where} now — goodnight` : "timer's up, but I couldn't leave voice — check the host logs and try again")
+    //
+    // Try every leave mechanism, VERIFYING after each: Discord sometimes
+    // ignores one path, so we don't trust "sent" — we check the actual
+    // voice state and keep trying until it's really gone.
+    const stillInVoice = () => !!findOwnerVoiceGuild(client, ownerId)?.channel
+    let attempt = 0
+    let left = false
+    while (attempt < 4 && !left) {
+      attempt++
+      if (attempt === 1) {
+        logline("sleep", "leave attempt 1: gateway OP 4")
+        gatewayLeaveVoice(client, targetGuildId)
+      } else if (attempt === 2) {
+        logline("sleep", "leave attempt 2: REST voice-states/@me")
+        await disconnectOwnerFromVoice(targetGuildId)
+      } else {
+        // Attempts 3-4: alternate again — sometimes the first packet
+        // races the phone's own voice session; a repeat lands.
+        logline("sleep", `leave attempt ${attempt}: gateway OP 4 (repeat)`)
+        gatewayLeaveVoice(client, targetGuildId)
+      }
+      await sleep(4000)
+      left = !stillInVoice()
+      logline("sleep", `after attempt ${attempt}: ${left ? "OUT of voice ✓" : "STILL in voice"}`)
+    }
+    if (left) {
+      await say(`left ${where} — goodnight`)
+    } else {
+      logerr("sleep", `FAILED to leave voice after ${attempt} attempts (guild ${targetGuildId})`)
+      await say(`tried ${attempt}x to leave ${where} but I'm still stuck in voice — check the host logs`)
+    }
   })
 
   await say(`okay — I'll leave ${where} in ${label}`)
