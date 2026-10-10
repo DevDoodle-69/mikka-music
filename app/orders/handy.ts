@@ -14,7 +14,6 @@ import { tellUser, replySoft, saySoft } from "../tools/say"
 import * as lines from "../chat/lines"
 import { getPlatform, setPlatform } from "../web/platform"
 import { startSleep, startSleepMs, cancelSleep, getSleepInfo } from "../voice/sleep"
-import { disconnectOwnerFromVoice } from "../voice/session"
 import { dropTemp } from "../web/fetchmp3"
 
 function handleTest(msg: Message): Promise<Message> {
@@ -430,14 +429,14 @@ async function handleSleep(msg: Message, args: string[], guild: Guild | undefine
     queue.playing = false
     const goodnight = lines.goodnight()
     await tellUser(msg, queue, goodnight)
-    // Owner leaves the voice channel as well — not just the bot.
-    await disconnectOwnerFromVoice(guild.id)
+    // Robot-only sleep: just the bot leaves. The owner's account is
+    // separate — its own ^sleep handles leaving voice over there.
     markIntentionalLeave(guild.id)
     try { queue.connection?.destroy() } catch {}
     queues.delete(guild.id)
     saveState()
   })
-  await replySoft(msg, `sleep timer set for **${label}**~ I'll fade out, say goodnight, and we'll both leave voice` + (process.env.OWNER_TOKEN ? "" : "\n**heads up:** OWNER_TOKEN isn't set on the host, so I can't pull *your* account out of voice — only I'll leave. Set it in Render env vars to fix that."))
+  await replySoft(msg, `sleep timer set for **${label}**~ I'll fade out, say goodnight, then leave voice`)
 }
 
 async function handleStay(msg: Message): Promise<void> {

@@ -2,25 +2,26 @@
  * ownerdesk.ts — self-commands for the OWNER's own account.
  *
  * When OWNER_TOKEN is set, the bot also logs in as the owner's account.
- * That shadow client only answers to its own messages with the ^ prefix,
- * and only the sleep command lives there:
+ * That client is fully separate from the robot: it only answers to its
+ * own ^ messages, and only the sleep command lives there:
  *
  *   ^sleep 30sec / ^sleep 4m / ^sleep 1h   — timer, then *I* leave voice
  *   ^sleep off                              — cancel
  *
- * The reply comes from the owner's own account, and when the timer ends
- * the owner is disconnected from voice (REST) while the robot stops
- * playback and leaves too. Full goodnight, both of us.
+ * When the timer ends, ONLY the owner's account leaves the voice chat.
+ * It never touches the robot — the robot is a separate bot with its own
+ * commands, and it will notice its owner left and follow on its own.
  */
-import { AudioPlayerStatus } from "@discordjs/voice"
 import { Message, Guild, VoiceChannel } from "selfbotsdk-discordjs"
-import { queues, saveState, markIntentionalLeave } from "../voice/shelf"
 import { startSleepMs, cancelSleep, getSleepInfo } from "../voice/sleep"
 import { disconnectOwnerFromVoice } from "../voice/session"
-import { clearSongTimers } from "../voice/jukebox"
-import { dropTemp } from "../web/fetchmp3"
 import { parseSleepDuration, formatSleepDuration } from "./handy"
 import { logline, logerr } from "../tools/log"
+
+/** Is the owner shadow client currently logged in? (for the dashboard) */
+let ownerClientOnline = false
+export function setOwnerClientOnline(v: boolean): void { ownerClientOnline = v }
+export function isOwnerClientOnline(): boolean { return ownerClientOnline }
 
 /** Which guild is the owner actually sitting in voice in (via this client)? */
 async function findOwnerVoiceGuild(client: any, ownerId: string): Promise<{ guild: Guild; channel: VoiceChannel } | null> {
@@ -99,25 +100,11 @@ async function handleOwnerSleep(msg: Message, args: string[]): Promise<void> {
   }
 
   const label = formatSleepDuration(totalMs)
-  // The robot's queue for this guild (if it's playing). Shared module state —
-  // both clients live in the same process.
-  const queue: any = queues.get(guild.id)
 
-  startSleepMs(guild.id, totalMs, queue || { volume: 1 }, async () => {
-    logline("sleep", `owner sleep done (${label}) — leaving voice`)
-    // 1. Stop the robot's playback.
-    if (queue) {
-      clearSongTimers(queue)
-      try { queue.player.removeAllListeners(AudioPlayerStatus.Idle) } catch {}
-      try { queue.player.stop() } catch {}
-      try { queue.currentProcesses?.ff?.kill() } catch {}
-      dropTemp(queue)
-      queue.songs = []
-      queue.playing = false
-    }
-    // 2. Disconnect the OWNER's account from wherever they're sitting.
-    //    Prefer their actual voice guild over the message guild.
-    //    REST first, native gateway packet as fallback.
+  startSleepMs(guild.id, totalMs, { volume: 1 }, async () => {
+    logline("sleep", `owner sleep done (${label}) — my account leaves voice`)
+    // ONLY my own account leaves. The robot is separate and untouched —
+    // it will see its owner left and follow on its own (normal auto-leave).
     let targetGuildId: string = guild.id
     try {
       const found = await findOwnerVoiceGuild(client, ownerId)
@@ -125,14 +112,7 @@ async function handleOwnerSleep(msg: Message, args: string[]): Promise<void> {
     } catch {}
     let ok = await disconnectOwnerFromVoice(targetGuildId)
     if (!ok) ok = gatewayLeaveVoice(client, targetGuildId)
-    // 3. Robot leaves too.
-    if (queue) {
-      markIntentionalLeave(guild.id)
-      try { queue.connection?.destroy() } catch {}
-      queues.delete(guild.id)
-      saveState()
-    }
-    await say(ok ? "left the voice chat — goodnight" : "timer's up — but I couldn't leave voice (check OWNER_TOKEN)")
+    await say(ok ? "left the voice chat — goodnight" : "timer's up, but I couldn't leave voice — check the connection and try again")
   })
 
   await say(`okay — I'll leave the voice chat in ${label}`)

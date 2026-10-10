@@ -8,7 +8,7 @@ import { queues, loadState, saveState } from "./voice/shelf"
 import { playTrack, playStation } from "./voice/jukebox"
 import { setClient, resumeAllMusic, registerVoiceStateUpdateHandler } from "./voice/session"
 import { handleMessageCreate, setOwnerSelfbotActive } from "./orders/desk"
-import { handleOwnerMessageCreate } from "./orders/ownerdesk"
+import { handleOwnerMessageCreate, setOwnerClientOnline } from "./orders/ownerdesk"
 import { setPlayTrackFunction, setPlayStationFunction } from "./chat/panel"
 import { joinVoiceChannel, createAudioPlayer } from "@discordjs/voice"
 import { Queue } from "./types"
@@ -194,11 +194,13 @@ if (process.env.OWNER_TOKEN) {
   ownerClient.on("ready", () => {
     console.log("✅ Owner client logged in as", (ownerClient.user as any)?.tag)
     setOwnerSelfbotActive(true)
+    setOwnerClientOnline(true)
   })
   ownerClient.on("messageCreate", handleOwnerMessageCreate)
   ownerClient.on("disconnect", () => {
     console.log("⚠️ Owner client disconnected")
     setOwnerSelfbotActive(false)
+    setOwnerClientOnline(false)
   })
   ownerClient.on("error", (err: Error) => console.error("Owner client error:", err.message?.slice(0, 80)))
   ownerClient.login(process.env.OWNER_TOKEN)

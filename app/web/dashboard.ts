@@ -17,6 +17,7 @@
 import { queues } from "../voice/shelf"
 import { recentLogs, logline, logerr } from "../tools/log"
 import { listTracks, saveUpload, deleteTrack, addFromUrl } from "./playlist"
+import { isOwnerClientOnline } from "../orders/ownerdesk"
 
 let botClient: any = null
 const startedAt = Date.now()
@@ -96,6 +97,7 @@ export function getStatus(): any {
     volume,
     loopMode,
     ownerLinked: !!process.env.OWNER_TOKEN,
+    ownerOnline: isOwnerClientOnline(),
     timestamp: Date.now(),
   }
 }
@@ -311,7 +313,7 @@ const PAGE = `<!DOCTYPE html>
 </div></div>
 
 <div class="wrap">
-  <div class="warnbar" id="warnbar"><svg viewBox="0 0 24 24"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg><span>Owner account not linked — set <b>OWNER_TOKEN</b> in Render env vars so sleep can pull your account out of voice too.</span></div>
+  <div class="warnbar" id="warnbar"><svg viewBox="0 0 24 24"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg><span id="warntext"></span></div>
   <div class="grid">
     <div class="card wide">
       <div class="card-head">
@@ -399,7 +401,15 @@ const PAGE = `<!DOCTYPE html>
   async function tick(){
     try {
       const d = await (await fetch('/api/status',{cache:'no-store'})).json();
-      $('warnbar').classList.toggle('show', d.online && !d.ownerLinked);
+      const wb = $('warnbar');
+      if (d.online && !d.ownerOnline) {
+        $('warntext').innerHTML = d.ownerLinked
+          ? 'Your account token is set but the account login failed — double-check <b>OWNER_TOKEN</b> on Render.'
+          : 'Your account is not linked — set <b>OWNER_TOKEN</b> in Render env vars to enable <b>^sleep</b> on your account.';
+        wb.classList.add('show');
+      } else {
+        wb.classList.remove('show');
+      }
       const pill = $('statusPill');
       pill.textContent = d.online ? 'LIVE' : 'OFFLINE';
       pill.className = 'pill' + (d.online ? ' on' : '');
