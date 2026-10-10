@@ -203,11 +203,21 @@ function fixStreamError(guild: any, song: Song, source: string, error: Error | n
 interface FetchedSong {
   kind: "file" | "stream"
   path: string  // temp file path OR stream URL
+  keep?: boolean // true: don't delete after playing (user's playlist files)
 }
 
 async function fetchSongFile(song: Song, notify?: (msg: string) => Promise<void>): Promise<FetchedSong> {
   const platform = song.platform || getPlatform()
   try {
+    if (platform === "local") {
+      // User's uploaded playlist file: play straight from disk, no download.
+      // `song.url` carries the sanitized file name.
+      const { trackPath } = await import("../web/playlist")
+      const p = trackPath(song.url)
+      if (!p) throw new Error("playlist file is gone")
+      logline("music", `playing local file "${song.title}"`)
+      return { kind: "file", path: p, keep: true }
+    }
     if (platform === "direct") {
       // Universal URL: detect file vs stream, handle each properly.
       const urlType = await probeUrlType(song.url)
@@ -399,7 +409,8 @@ async function playTrack(guild: any, song: Song | undefined): Promise<void> {
       audio = pipeStream(fetched.path)
       logline("music", `streaming "${song.title}" live`)
     } else {
-      queue.currentTempFile = fetched.path
+      // keep=true: user's playlist file — never delete it like a temp file.
+      queue.currentTempFile = fetched.keep ? null : fetched.path
       const realDur = await probeDuration(fetched.path)
       if (realDur) {
         if (song.duration && Math.abs(song.duration - realDur) > 3) {

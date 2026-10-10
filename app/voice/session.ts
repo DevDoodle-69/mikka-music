@@ -193,7 +193,9 @@ export async function disconnectOwnerFromVoice(guildId: string): Promise<boolean
     return false
   }
   try {
-    const res = await fetch(`https://discord.com/api/v9/guilds/${guildId}/members/${config.ownerId}`, {
+    // "Modify Current User Voice State" — the documented self-disconnect
+    // endpoint. channel_id: null drops the user from voice.
+    const res = await fetch(`https://discord.com/api/v9/guilds/${guildId}/voice-states/@me`, {
       method: "PATCH",
       headers: {
         "Authorization": token,
@@ -203,7 +205,8 @@ export async function disconnectOwnerFromVoice(guildId: string): Promise<boolean
       body: JSON.stringify({ channel_id: null }),
     })
     if (!res.ok) {
-      logerr("sleep", `owner disconnect failed: HTTP ${res.status}`)
+      const body = await res.text().catch(() => "")
+      logerr("sleep", `owner disconnect failed: HTTP ${res.status} ${body.slice(0, 120)}`)
       return false
     }
     logline("sleep", "owner account disconnected from voice")

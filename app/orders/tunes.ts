@@ -16,6 +16,60 @@ import { dropTemp } from "../web/fetchmp3"
 import { watchConnection } from "../voice/watchdog"
 import { searchSpotify, findOnSpotify, resolveSpotifyPlaylist } from "../web/spotify"
 import { getPlatform } from "../web/platform"
+import { listTracks } from "../web/playlist"
+
+/**
+ * @Mikka playlist play all   — shuffle-play every uploaded song
+ * @Mikka playlist play 10    — shuffle-play up to 10 uploaded songs
+ * @Mikka playlist list       — show what's in My Playlist
+ */
+async function handlePlaylist(msg: Message, args: string[], guild: Guild, voice: VoiceChannel | null, queue: Queue | undefined): Promise<void> {
+  const sub = (args[0] || "").toLowerCase()
+  if (sub === "list") {
+    const tracks = listTracks()
+    if (tracks.length === 0) {
+      await tellUser(msg, queue, "my playlist is empty~ upload songs from the dashboard and I'll keep them here")
+      return
+    }
+    const linesOut = tracks.slice(0, 20).map((t, i) => `**${i + 1}.** ${t.name} (${(t.size / 1048576).toFixed(1)}MB)`)
+    const more = tracks.length > 20 ? `\n…and ${tracks.length - 20} more on the dashboard` : ""
+    await tellUser(msg, queue, `my playlist has **${tracks.length}** songs~\n${linesOut.join("\n")}${more}`)
+    return
+  }
+  if (sub === "play") {
+    const tracks = listTracks()
+    if (tracks.length === 0) {
+      await tellUser(msg, queue, "nothing uploaded yet~ add songs on the dashboard first, then I'll shuffle them for you")
+      return
+    }
+    const arg = (args[1] || "all").toLowerCase()
+    // Fisher-Yates shuffle.
+    const picked = [...tracks]
+    for (let i = picked.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[picked[i], picked[j]] = [picked[j], picked[i]]
+    }
+    let chosen = picked
+    if (arg !== "all") {
+      const n = parseInt(arg)
+      if (isNaN(n) || n < 1) {
+        await tellUser(msg, queue, "say `playlist play all` or a number~ like `playlist play 10`")
+        return
+      }
+      chosen = picked.slice(0, Math.min(n, picked.length))
+    }
+    const songs: Song[] = chosen.map((t) => ({
+      title: t.name.replace(/\.[^.]+$/, ""),
+      url: t.name, // file name — resolved via trackPath at play time
+      platform: "local" as const,
+    }))
+    await tellUser(msg, queue, `shuffling **${songs.length}** from your playlist~ let's go`)
+    logline("music", `playlist play: ${songs.length} shuffled local tracks`)
+    await enqueueAndPlay(msg, guild, voice, queue, songs)
+    return
+  }
+  await tellUser(msg, queue, "try `@Mikka playlist play all`, `@Mikka playlist play 10`, or `@Mikka playlist list`~")
+}
 
 interface PlaylistJSON {
   entries: Array<{
@@ -633,6 +687,7 @@ async function handleVolume(msg: Message, args: string[], queue: Queue | undefin
 export {
   handlePlay,
   handleAiPlay,
+  handlePlaylist,
   handleSkip,
   handleLoop,
   handleShuffle,
