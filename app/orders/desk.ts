@@ -13,15 +13,19 @@ async function handleMessageCreate(msg: Message): Promise<void> {
   // Owner-only: this bot answers to exactly one Discord user ID.
   if (msg.author.id !== config.ownerId) return
 
-  // Commands work two ways: mention her (@BotName play ...) or caret prefix (^play ...).
+  // Command styles, split by account:
+  // - @mention (@BotName play ...) → the robot's interface. Always on.
+  // - ^ prefix (^play ...) → ONLY when this code runs on the owner's own
+  //   account (self-bot mode). The robot never answers to ^.
   const botId = msg.client.user?.id
   if (!botId) return
+  const isOwnerAccount = botId === config.ownerId
   const mentionRe = new RegExp("^<@!?" + botId + ">\\s*")
   const caretRe = /^\^\s*/
   let body: string | null = null
   if (mentionRe.test(msg.content)) {
     body = msg.content.replace(mentionRe, "")
-  } else if (caretRe.test(msg.content)) {
+  } else if (isOwnerAccount && caretRe.test(msg.content)) {
     body = msg.content.replace(caretRe, "")
   }
   if (body === null) return

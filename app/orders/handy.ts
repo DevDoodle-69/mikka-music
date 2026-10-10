@@ -397,7 +397,7 @@ async function handleSleep(msg: Message, args: string[], guild: Guild | undefine
       const leftMs = Math.max(1000, info.endsAt - Date.now())
       await replySoft(msg, `sleep timer's on~ **${formatSleepDuration(leftMs)}** left before I say goodnight`)
     } else {
-      await replySoft(msg, "no sleep timer set~ try `^sleep 30sec` or `^sleep 1h`")
+      await replySoft(msg, "no sleep timer set~ try `@Mikka sleep 30sec` or `@Mikka sleep 1h`")
     }
     return
   }
